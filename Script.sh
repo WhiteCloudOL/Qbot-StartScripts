@@ -4,6 +4,7 @@
 # Maim-with-u/
 #   MaiBot/
 #   MaiBot-Napcat-Adapter/
+#   venv/
 #   Script.sh
 
 RED='\033[0;31m'
