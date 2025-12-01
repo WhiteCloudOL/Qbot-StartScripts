@@ -253,6 +253,8 @@ show_menu() {
     echo -e "11. 查看 Adapter 窗口"
     echo -e "12. 查看 TTS Adapter 窗口"
     echo -e "13. 查看所有screen会话"
+    echo -e "${PURPLE}--- 查看脚本帮助信息 ---${NC}"
+    echo -e "14. 帮助信息"
     echo -e "${BLUE}=====================================${NC}"
     echo -e "0. 退出脚本"
     echo -e "${BLUE}=====================================${NC}"
@@ -330,6 +332,15 @@ main() {
             13)
                 echo -e "\n${BLUE}所有screen会话:${NC}"
                 screen -list
+                ;;
+            14)
+                echo -e "${GREEN}----帮助信息----\n文件分布：${NC}"
+                echo -e "Maim-with-u/"
+                echo -e "├──MaiBot/"
+                echo -e "├──MaiBot-Napcat-Adapter/"
+                echo -e "├──(可选)maimbot_tts_adapter/"
+                echo -e "├──venv/"
+                echo -e "└──Script.sh"
                 ;;
             0)
                 echo -e "${GREEN}再见！${NC}"
