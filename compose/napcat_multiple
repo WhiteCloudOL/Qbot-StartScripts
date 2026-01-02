@@ -1,0 +1,135 @@
+services:
+  napcat1:
+    environment:
+      - NAPCAT_UID=${NAPCAT_UID:-1000}
+      - NAPCAT_GID=${NAPCAT_GID:-1000}
+      - HOST_IP=host.docker.internal
+      - INSTANCE_ID=1
+    container_name: napcat1
+    restart: always
+    image: mlikiowa/napcat-docker:latest
+    ports:
+      - "6201:6099"
+    volumes:
+      - ./napcat1/config:/app/napcat/config
+      - ./ntqq1:/app/.config/QQ
+    networks:
+      - napcat-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 223.5.5.5
+      - 8.8.8.8
+
+  napcat2:
+    environment:
+      - NAPCAT_UID=${NAPCAT_UID:-1000}
+      - NAPCAT_GID=${NAPCAT_GID:-1000}
+      - HOST_IP=host.docker.internal
+      - INSTANCE_ID=2
+    container_name: napcat2
+    restart: always
+    image: mlikiowa/napcat-docker:latest
+    ports:
+      - "6202:6099"
+    volumes:
+      - ./napcat2/config:/app/napcat/config
+      - ./ntqq2:/app/.config/QQ
+    networks:
+      - napcat-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 223.5.5.5
+      - 8.8.8.8
+
+  napcat3:
+    environment:
+      - NAPCAT_UID=${NAPCAT_UID:-1000}
+      - NAPCAT_GID=${NAPCAT_GID:-1000}
+      - HOST_IP=host.docker.internal
+      - INSTANCE_ID=3
+    container_name: napcat3
+    restart: always
+    image: mlikiowa/napcat-docker:latest
+    ports:
+      - "6203:6099"
+    volumes:
+      - ./napcat3/config:/app/napcat/config
+      - ./ntqq3:/app/.config/QQ
+    networks:
+      - napcat-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 223.5.5.5
+      - 8.8.8.8
+
+  napcat4:
+    environment:
+      - NAPCAT_UID=${NAPCAT_UID:-1000}
+      - NAPCAT_GID=${NAPCAT_GID:-1000}
+      - HOST_IP=host.docker.internal
+      - INSTANCE_ID=4
+    container_name: napcat4
+    restart: always
+    image: mlikiowa/napcat-docker:latest
+    ports:
+      - "6204:6099"
+    volumes:
+      - ./napcat4/config:/app/napcat/config
+      - ./ntqq4:/app/.config/QQ
+    networks:
+      - napcat-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 223.5.5.5
+      - 8.8.8.8
+
+  napcat5:
+    environment:
+      - NAPCAT_UID=${NAPCAT_UID:-1000}
+      - NAPCAT_GID=${NAPCAT_GID:-1000}
+      - HOST_IP=host.docker.internal
+      - INSTANCE_ID=5
+    container_name: napcat5
+    restart: always
+    image: mlikiowa/napcat-docker:latest
+    ports:
+      - "6205:6099"
+    volumes:
+      - ./napcat5/config:/app/napcat/config
+      - ./ntqq5:/app/.config/QQ
+    networks:
+      - napcat-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 223.5.5.5
+      - 8.8.8.8
+  napcat6:
+    environment:
+      - NAPCAT_UID=${NAPCAT_UID:-1000}
+      - NAPCAT_GID=${NAPCAT_GID:-1000}
+      - HOST_IP=host.docker.internal
+      - INSTANCE_ID=6
+    container_name: napcat6
+    restart: always
+    image: mlikiowa/napcat-docker:latest
+    ports:
+      - "6206:6099"
+    volumes:
+      - ./napcat6/config:/app/napcat/config
+      - ./ntqq6:/app/.config/QQ
+    networks:
+      - napcat-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 223.5.5.5
+      - 8.8.8.8
+
+networks:
+  napcat-network:
+    driver: bridge
