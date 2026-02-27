@@ -7,7 +7,11 @@ An easy way to launch MaiBot/AstrBot on Linux&Windows
 ## 关键提醒
 关于脚本的使用方法具体见视频部分，maibot脚本已经完成升级，现在可以使用新脚本来一站式管理MaiBot
 ```bash
-curl -s https://dl.meowyun.cn/bot/bash/maibot.sh > maibot.sh && bash maibot.sh
+# 国内下载
+curl -o maibot.sh https://dl.meowyun.cn/bot/bash/maibot.sh && bash maibot.sh
+
+# 海外下载
+curl -o maibot.sh https://raw.githubusercontent.com/WhiteCloudOL/Qbot-StartScripts/refs/heads/main/maibot.sh && bash maibot.sh
 ```
 
 ```
