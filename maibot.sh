@@ -9,6 +9,7 @@
 # =========================================================
 
 CONFIG_FILE="$HOME/.maibot_config"
+INSTALLATION_ACTIVE=false
 
 # --- 颜色定义 ---
 RED='\033[1;31m'
@@ -55,12 +56,12 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 draw_header() {
     clear
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.4${NC}               ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.5${NC}               ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
     
-    # 状态栏 (面包屑导航)
-    if [[ -n "$USER_INSTALL_PATH" ]]; then
+    # 状态栏 (面包屑导航) - 仅在安装流程中且已设置路径时显示
+    if [[ "$INSTALLATION_ACTIVE" == "true" && -n "$USER_INSTALL_PATH" ]]; then
         echo -e "${WHITE} 配置预览:${NC}"
         echo -e " ${GREY}●${NC} 目录: ${CYAN}${USER_INSTALL_PATH}${NC}"
         
@@ -867,8 +868,266 @@ manage_maibot_menu() {
     done
 }
 
+
+
+
 # =========================================================
-# 7. 入口
+# 7. LPMM知识库菜单
+# =========================================================
+
+manage_lpmm_menu() {
+    # 加载配置，获取安装路径
+    if ! load_config; then
+        log_error "未找到安装配置，请先执行安装（主菜单选项1）"
+        read -p "按回车返回主菜单..."
+        return
+    fi
+
+    local MAIBOT_DIR="$MAI_PATH/MaiBot"
+    local DATA_DIR="$MAIBOT_DIR/data"
+    local RAW_DIR="$DATA_DIR/lpmm_raw_data"
+    local OPENIE_DIR="$DATA_DIR/openie"
+    local VENV_PATH="$MAI_PATH/venv/bin/activate"
+    local SCRIPT_INFO="$MAIBOT_DIR/scripts/info_extraction.py"
+    local SCRIPT_IMPORT="$MAIBOT_DIR/scripts/import_openie.py"
+
+    # 检查必要目录和脚本是否存在
+    if [[ ! -d "$MAIBOT_DIR" ]]; then
+        log_error "MaiBot 目录不存在: $MAIBOT_DIR"
+        read -p "按回车返回..."
+        return
+    fi
+
+    if [[ ! -f "$SCRIPT_INFO" ]]; then
+        log_warning "未找到 info_extraction.py，可能版本不完整"
+    fi
+    if [[ ! -f "$SCRIPT_IMPORT" ]]; then
+        log_warning "未找到 import_openie.py，可能版本不完整"
+    fi
+
+    # 检查 screen 是否安装
+    local SCREEN_AVAILABLE=false
+    if command -v screen &>/dev/null; then
+        SCREEN_AVAILABLE=true
+    else
+        log_warning "未安装 screen，后台运行功能无法使用"
+    fi
+
+    while true; do
+        draw_header
+        echo -e "${BLUE}▶ LPMM 知识库管理${NC}"
+        echo -e " 数据目录: ${CYAN}$DATA_DIR${NC}"
+
+        # 后台任务状态显示
+        local info_status import_status
+        if [[ "$SCREEN_AVAILABLE" == true ]]; then
+            if screen -list | grep -q "mai-lpmm-info"; then
+                info_status="${GREEN}● 运行中${NC}"
+            else
+                info_status="${RED}○ 未运行${NC}"
+            fi
+            if screen -list | grep -q "mai-lpmm-import"; then
+                import_status="${GREEN}● 运行中${NC}"
+            else
+                import_status="${RED}○ 未运行${NC}"
+            fi
+        else
+            info_status="${YELLOW}不可用${NC}"
+            import_status="${YELLOW}不可用${NC}"
+        fi
+        echo -e " 文本分割与实体提取: ${info_status}"
+        echo -e " 知识库导入: ${import_status}"
+
+        draw_line
+        echo -e "${GREEN}1.${NC} 初始化LPMM知识库 ${WHITE}(创建目录结构)${NC}"
+        echo -e "${GREEN}2.${NC} 文本分割与实体提取 ${WHITE}(前台运行)${NC}"
+        echo -e "${GREEN}3.${NC} 文本分割与实体提取 ${WHITE}(后台运行 - screen)${NC}"
+        echo -e "${RED}4.${NC} 关闭后台文本分割与实体提取"
+        draw_line
+        echo -e "${GREEN}5.${NC} 导入LPMM知识库 ${WHITE}(前台运行)${NC}"
+        echo -e "${GREEN}6.${NC} 导入LPMM知识库 ${WHITE}(后台运行 - screen)${NC}"
+        echo -e "${RED}7.${NC} 关闭后台LPMM知识库导入"
+        draw_line
+        echo -e "${WHITE}0.${NC} 返回主菜单"
+        echo -e ""
+        read -p " 请选择: " lpmm_opt
+
+        case $lpmm_opt in
+            1)
+                draw_header
+                echo -e "${BLUE}▶ 初始化LPMM知识库目录${NC}"
+                mkdir -p "$RAW_DIR" "$OPENIE_DIR"
+                log_success "目录创建完成（如已存在则跳过）"
+                echo -e "请将知识库 ${YELLOW}txt文件${NC} 放入: ${CYAN}$RAW_DIR${NC}"
+                echo -e "将已经提取好的 ${YELLOW}openie文件${NC} 放入: ${CYAN}$OPENIE_DIR${NC}"
+                echo -e "${WHITE}提示：${NC}需要先进行文本分割与实体提取（选项2/3），再导入LPMM知识库（选项5/6）"
+                read -p "按回车继续..."
+                ;;
+            2)
+                if [[ ! -f "$SCRIPT_INFO" ]]; then
+                    log_error "脚本文件不存在: $SCRIPT_INFO"
+                    read -p "按回车继续..."
+                    continue
+                fi
+                draw_header
+                echo -e "${BLUE}▶ 文本分割与实体提取 (前台)${NC}"
+                echo -e "${YELLOW}注意：此过程可能耗时较长，请勿关闭终端窗口！${NC}"
+                echo -e "正在激活虚拟环境并运行脚本...\n"
+                bash -c "source '$VENV_PATH' && python '$SCRIPT_INFO'"
+                echo -e "\n${GREEN}脚本执行完毕。${NC}"
+                read -p "按回车继续..."
+                ;;
+            3)
+                if [[ "$SCREEN_AVAILABLE" == false ]]; then
+                    log_error "screen 未安装，无法使用后台功能"
+                    read -p "按回车继续..."
+                    continue
+                fi
+                if [[ ! -f "$SCRIPT_INFO" ]]; then
+                    log_error "脚本文件不存在: $SCRIPT_INFO"
+                    read -p "按回车继续..."
+                    continue
+                fi
+                draw_header
+                echo -e "${BLUE}▶ 文本分割与实体提取 (后台)${NC}"
+                if screen -list | grep -q "mai-lpmm-info"; then
+                    echo -e "${YELLOW}后台任务已存在，会话名: mai-lpmm-info${NC}"
+                    echo -e "1. 进入该会话查看 (screen -r)"
+                    echo -e "2. 关闭现有并重新启动"
+                    echo -e "3. 返回"
+                    read -p "请选择 [1-3]: " exist_opt
+                    case $exist_opt in
+                        1)
+                            echo -e "进入 screen 会话，退出请按 ${WHITE}Ctrl+A 然后 D${NC}"
+                            sleep 1
+                            screen -r mai-lpmm-info
+                            ;;
+                        2)
+                            screen -S mai-lpmm-info -X quit 2>/dev/null
+                            log_info "已关闭旧会话，重新启动..."
+                            screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
+                            log_success "已在后台启动，会话名: mai-lpmm-info"
+                            echo -e "查看进度: ${CYAN}screen -r mai-lpmm-info${NC}"
+                            echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
+                            read -p "是否立即进入该 screen 会话？(y/n): " enter_now
+                            if [[ "$enter_now" == "y" || "$enter_now" == "Y" ]]; then
+                                screen -r mai-lpmm-info
+                            fi
+                            ;;
+                        3) ;;
+                    esac
+                else
+                    screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
+                    log_success "已在后台启动，会话名: mai-lpmm-info"
+                    echo -e "查看进度: ${CYAN}screen -r mai-lpmm-info${NC}"
+                    echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
+                    read -p "是否立即进入该 screen 会话？(y/n): " enter_now
+                    if [[ "$enter_now" == "y" || "$enter_now" == "Y" ]]; then
+                        screen -r mai-lpmm-info
+                    fi
+                fi
+                read -p "按回车继续..."
+                ;;
+            4)
+                draw_header
+                echo -e "${BLUE}▶ 关闭后台文本分割与实体提取${NC}"
+                if screen -list | grep -q "mai-lpmm-info"; then
+                    screen -S mai-lpmm-info -X quit
+                    log_success "已关闭会话 mai-lpmm-info"
+                else
+                    log_info "没有正在运行的后台任务 (mai-lpmm-info)"
+                fi
+                read -p "按回车继续..."
+                ;;
+            5)
+                if [[ ! -f "$SCRIPT_IMPORT" ]]; then
+                    log_error "脚本文件不存在: $SCRIPT_IMPORT"
+                    read -p "按回车继续..."
+                    continue
+                fi
+                draw_header
+                echo -e "${BLUE}▶ 导入LPMM知识库 (前台)${NC}"
+                echo -e "${YELLOW}注意：此过程可能耗时较长，请勿关闭终端窗口！${NC}"
+                echo -e "正在激活虚拟环境并运行脚本...\n"
+                bash -c "source '$VENV_PATH' && python '$SCRIPT_IMPORT'"
+                echo -e "\n${GREEN}脚本执行完毕。${NC}"
+                read -p "按回车继续..."
+                ;;
+            6)
+                if [[ "$SCREEN_AVAILABLE" == false ]]; then
+                    log_error "screen 未安装，无法使用后台功能"
+                    read -p "按回车继续..."
+                    continue
+                fi
+                if [[ ! -f "$SCRIPT_IMPORT" ]]; then
+                    log_error "脚本文件不存在: $SCRIPT_IMPORT"
+                    read -p "按回车继续..."
+                    continue
+                fi
+                draw_header
+                echo -e "${BLUE}▶ 导入LPMM知识库 (后台)${NC}"
+                if screen -list | grep -q "mai-lpmm-import"; then
+                    echo -e "${YELLOW}后台任务已存在，会话名: mai-lpmm-import${NC}"
+                    echo -e "1. 进入该会话查看"
+                    echo -e "2. 关闭现有并重新启动"
+                    echo -e "3. 返回"
+                    read -p "请选择 [1-3]: " exist_opt
+                    case $exist_opt in
+                        1)
+                            echo -e "进入 screen 会话，退出请按 ${WHITE}Ctrl+A 然后 D${NC}"
+                            sleep 1
+                            screen -r mai-lpmm-import
+                            ;;
+                        2)
+                            screen -S mai-lpmm-import -X quit 2>/dev/null
+                            log_info "已关闭旧会话，重新启动..."
+                            screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
+                            log_success "已在后台启动，会话名: mai-lpmm-import"
+                            echo -e "查看进度: ${CYAN}screen -r mai-lpmm-import${NC}"
+                            echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
+                            read -p "是否立即进入该 screen 会话？(y/n): " enter_now
+                            if [[ "$enter_now" == "y" || "$enter_now" == "Y" ]]; then
+                                screen -r mai-lpmm-import
+                            fi
+                            ;;
+                        3) ;;
+                    esac
+                else
+                    screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
+                    log_success "已在后台启动，会话名: mai-lpmm-import"
+                    echo -e "查看进度: ${CYAN}screen -r mai-lpmm-import${NC}"
+                    echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
+                    read -p "是否立即进入该 screen 会话？(y/n): " enter_now
+                    if [[ "$enter_now" == "y" || "$enter_now" == "Y" ]]; then
+                        screen -r mai-lpmm-import
+                    fi
+                fi
+                read -p "按回车继续..."
+                ;;
+            7)
+                draw_header
+                echo -e "${BLUE}▶ 关闭后台LPMM知识库导入${NC}"
+                if screen -list | grep -q "mai-lpmm-import"; then
+                    screen -S mai-lpmm-import -X quit
+                    log_success "已关闭会话 mai-lpmm-import"
+                else
+                    log_info "没有正在运行的后台任务 (mai-lpmm-import)"
+                fi
+                read -p "按回车继续..."
+                ;;
+            0)
+                return
+                ;;
+            *)
+                log_warning "无效选项"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# =========================================================
+# 8. 入口
 # =========================================================
 
 main_menu() {
@@ -879,6 +1138,7 @@ main_menu() {
         echo -e "${PURPLE}2.${NC} 管理 MaiBot 核心   ${WHITE}(Bot / Adapter / TTS)${NC}"
         echo -e "${CYAN}3.${NC} 管理 NapCat 服务   ${WHITE}(Docker Start / Stop)${NC}"
         echo -e "${BLUE}4.${NC} 配置与访问         ${WHITE}(密钥 / 黑白名单)${NC}"
+        echo -e "${YELLOW}5.${NC} LPMM知识库         ${WHITE}(文本提取/导入)${NC}"
         draw_line
         echo -e "${WHITE}0.${NC} 退出脚本"
         echo -e ""
@@ -886,13 +1146,15 @@ main_menu() {
         
         case $choice in
             1) 
+                INSTALLATION_ACTIVE=true
                 configure_install_path
                 step_install_mode
                 step_venv_mode
                 configure_github
                 configure_pip
                 configure_napcat_selection
-                run_install 
+                run_install
+                INSTALLATION_ACTIVE=false
                 ;;
             2) manage_maibot_menu ;;
             3) 
@@ -900,9 +1162,12 @@ main_menu() {
                 else log_error "未找到安装配置，请先执行安装。"; read -p "按回车继续..."
                 fi ;;
             4) manage_config_access_menu ;;
+            5) manage_lpmm_menu ;;
             0) exit 0 ;;
         esac
     done
 }
+
+
 
 main_menu
