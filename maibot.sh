@@ -56,7 +56,7 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 draw_header() {
     clear
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.5${NC}               ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.6${NC}               ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
     
@@ -957,7 +957,7 @@ manage_lpmm_menu() {
                 draw_header
                 echo -e "${BLUE}▶ 初始化LPMM知识库目录${NC}"
                 mkdir -p "$RAW_DIR" "$OPENIE_DIR"
-                log_success "目录创建完成（如已存在则跳过）"
+                log_success "目录创建完成"
                 echo -e "请将知识库 ${YELLOW}txt文件${NC} 放入: ${CYAN}$RAW_DIR${NC}"
                 echo -e "将已经提取好的 ${YELLOW}openie文件${NC} 放入: ${CYAN}$OPENIE_DIR${NC}"
                 echo -e "${WHITE}提示：${NC}需要先进行文本分割与实体提取（选项2/3），再导入LPMM知识库（选项5/6）"
@@ -1127,7 +1127,383 @@ manage_lpmm_menu() {
 }
 
 # =========================================================
-# 8. 入口
+# 8. 插件管理菜单
+# =========================================================
+
+manage_plugins_menu() {
+    if ! load_config; then
+        log_error "未找到安装配置，请先执行安装"
+        read -p "按回车返回主菜单..."
+        return
+    fi
+
+    local MAIBOT_DIR="$MAI_PATH/MaiBot"
+    local PLUGINS_DIR="$MAIBOT_DIR/plugins"
+    local VENV_PATH="$MAI_PATH/venv/bin/activate"
+
+    if [[ ! -d "$MAIBOT_DIR" ]]; then
+        log_error "MaiBot 目录不存在: $MAIBOT_DIR"
+        read -p "按回车返回..."
+        return
+    fi
+
+    mkdir -p "$PLUGINS_DIR"
+
+    # 获取当前配置的 GitHub 加速源，如果未设置则进行选择
+    get_github_proxy() {
+        if [[ -n "$USER_GH_PROXY" ]]; then
+            return
+        fi
+        
+        draw_header
+        echo -e "${BLUE}▶ GitHub 线路配置${NC}"
+        
+        run_speedtest() {
+            echo -e "${YELLOW}正在并行测速，请稍候...${NC}"
+            local temp_dir=$(mktemp -d)
+            local mirrors=("https://github.com" "${GITHUB_MIRRORS[@]}")
+            
+            for mirror in "${mirrors[@]}"; do
+                (
+                    local test_url
+                    [[ "$mirror" == "https://github.com" ]] && test_url="$TEST_FILE_PATH" || test_url="${mirror}/${TEST_FILE_PATH}"
+                    
+                    local time_cost
+                    time_cost=$(curl -sL -o /dev/null --max-time 3 -w "%{time_total}" "$test_url")
+                    local exit_code=$?
+                    
+                    if [[ $exit_code -eq 0 ]]; then
+                        local ms=$(awk -v t="$time_cost" 'BEGIN {printf "%.0f", t*1000}')
+                        echo "$ms $mirror" >> "$temp_dir/results"
+                    else
+                        echo "9999 $mirror" >> "$temp_dir/results"
+                    fi
+                ) &
+            done
+            wait
+            
+            echo -e "\n   延迟(ms) | 线路地址"
+            echo -e "------------|----------------------------------"
+            
+            local best_mirror=""
+            local best_ms=9999
+
+            if [[ -f "$temp_dir/results" ]]; then
+                sort -n "$temp_dir/results" > "$temp_dir/sorted"
+                
+                while read line; do
+                    local ms=$(echo $line | awk '{print $1}')
+                    local url=$(echo $line | awk '{print $2}')
+                    
+                    if [[ "$ms" == "9999" ]]; then
+                        echo -e " ${RED}超时/失败${NC}| $url"
+                    else
+                        if [[ -z "$best_mirror" ]]; then
+                            best_mirror=$url
+                            best_ms=$ms
+                        fi
+                        
+                        local color=$GREEN
+                        if [ "$ms" -gt 800 ]; then color=$YELLOW; fi
+                        if [ "$ms" -gt 1500 ]; then color=$RED; fi
+                        echo -e " ${color}${ms}ms${NC}\t| $url"
+                    fi
+                done < "$temp_dir/sorted"
+            fi
+
+            if [[ -n "$best_mirror" ]]; then
+                USER_GH_PROXY="$best_mirror"
+                echo -e "\n自动选择: ${CYAN}$best_mirror${NC} (延迟: ${best_ms}ms)"
+            else
+                USER_GH_PROXY="https://gh-proxy.org"
+                echo -e "\n${RED}测速全失败，使用默认代理。${NC}"
+            fi
+            
+            rm -rf "$temp_dir"
+            sleep 2
+        }
+
+        echo -e "${GREEN}1.${NC} 自动测速选择最佳线路 ${WHITE}(并行极速)${NC}"
+        echo -e "${GREEN}2.${NC} 手动选择线路"
+        echo -e "${GREEN}3.${NC} 官方直连"
+        read -p "选择 [1-3] (默认1): " gh_choice
+        case ${gh_choice:-1} in
+            2) select mirror in "${GITHUB_MIRRORS[@]}"; do USER_GH_PROXY="$mirror"; break; done ;;
+            3) USER_GH_PROXY="https://github.com" ;;
+            *) run_speedtest ;;
+        esac
+    }
+
+    # 将 GitHub URL 转换为加速 URL
+    convert_github_url() {
+        local url="$1"
+        
+        # ���除末尾的 .git
+        url="${url%.git}"
+        
+        # 提取 username/repo
+        local repo=""
+        if [[ "$url" =~ github\.com/([^/]+/[^/]+)$ ]]; then
+            repo="${BASH_REMATCH[1]}"
+        else
+            echo "$url"
+            return
+        fi
+        
+        if [[ "$USER_GH_PROXY" == "https://github.com" ]]; then
+            echo "https://github.com/$repo.git"
+        else
+            echo "${USER_GH_PROXY}/https://github.com/${repo}.git"
+        fi
+    }
+
+    list_plugins() {
+        if [[ ! -d "$PLUGINS_DIR" ]]; then return; fi
+        local count=0
+        for dir in "$PLUGINS_DIR"/*; do
+            # 跳过 __pycache__ 目录
+            if [[ -d "$dir" && "$(basename "$dir")" != "__pycache__" ]]; then
+                count=$((count + 1))
+                echo -e " ${CYAN}$(basename "$dir")${NC}"
+            fi
+        done
+        if [[ $count -eq 0 ]]; then echo -e " ${GREY}(无插件)${NC}"; fi
+    }
+
+    while true; do
+        draw_header
+        echo -e "${BLUE}▶ 插件管理${NC}"
+        echo -e " 插件目录: ${CYAN}$PLUGINS_DIR${NC}"
+        echo -e "\n 已安装插件:"
+        list_plugins
+        draw_line
+        echo -e "${GREEN}1.${NC} 安装插件"
+        echo -e "${GREEN}2.${NC} 卸载插件"
+        echo -e "${GREEN}3.${NC} 安装插件依赖"
+        draw_line
+        echo -e "${WHITE}0.${NC} 返回主菜单"
+        echo -e ""
+        read -p " 请选择: " plugin_opt
+
+        case $plugin_opt in
+            1)
+                draw_header
+                echo -e "${BLUE}▶ 安装插件${NC}"
+                echo -e "请输入插件 GitHub 地址，支持以下格式："
+                echo -e " • https://github.com/username/repo"
+                echo -e " • https://github.com/username/repo.git"
+                echo -e " • username/repo"
+                read -p "请输入: " plugin_input
+
+                if [[ -z "$plugin_input" ]]; then
+                    log_warning "输入不能为空"
+                    read -p "按回车继续..."
+                    continue
+                fi
+
+                # 获取 GitHub 加速源
+                get_github_proxy
+
+                # 规范化 URL
+                local git_url=""
+                if [[ "$plugin_input" =~ ^https?:// ]]; then
+                    git_url=$(convert_github_url "$plugin_input")
+                else
+                    git_url=$(convert_github_url "https://github.com/$plugin_input")
+                fi
+
+                # 提取插件名称
+                local plugin_name=$(echo "$git_url" | sed 's|.*/||' | sed 's|\.git$||')
+                local plugin_path="$PLUGINS_DIR/$plugin_name"
+
+                echo -e "\n${BLUE}插件信息:${NC}"
+                echo -e " 名称: ${CYAN}$plugin_name${NC}"
+                echo -e " 地址: ${CYAN}$git_url${NC}"
+                echo -e " 路径: ${CYAN}$plugin_path${NC}"
+
+                if [[ -d "$plugin_path" ]]; then
+                    log_info "检测到插件已存在，尝试更新..."
+                    cd "$plugin_path" || continue
+                    git pull
+                    if [ $? -eq 0 ]; then
+                        log_success "插件更新成功"
+                        cd "$MAI_PATH" || continue
+                    else
+                        log_error "更新失败"
+                        cd "$MAI_PATH" || continue
+                        echo -e "${YELLOW}是否删除旧插件并重新克隆？${NC}"
+                        read -p "请输入 (y/n): " re_choice
+                        if [[ "$re_choice" != "y" ]]; then
+                            read -p "按回车继续..."
+                            continue
+                        fi
+                        rm -rf "$plugin_path"
+                    fi
+                fi
+
+                if [[ ! -d "$plugin_path" ]]; then
+                    log_info "正在克隆插件 ${CYAN}$plugin_name${NC}..."
+                    git clone --depth 1 --progress "$git_url" "$plugin_path"
+                    if [ $? -ne 0 ]; then
+                        log_error "克隆失败！"
+                        rm -rf "$plugin_path"
+                        read -p "按回车继续..."
+                        continue
+                    fi
+                fi
+
+                # 创建 .gitignore 屏蔽 __pycache__
+                if [[ ! -f "$plugin_path/.gitignore" ]]; then
+                    echo "__pycache__/" > "$plugin_path/.gitignore"
+                    echo "*.pyc" >> "$plugin_path/.gitignore"
+                    echo ".DS_Store" >> "$plugin_path/.gitignore"
+                fi
+
+                if [[ -f "$plugin_path/requirements.txt" ]]; then
+                    echo -e "\n${BLUE}▶ 安装插件依赖${NC}"
+                    source "$VENV_PATH"
+                    pip install -r "$plugin_path/requirements.txt"
+                    if [ $? -eq 0 ]; then
+                        log_success "依赖安装成功"
+                    else
+                        log_error "依赖安装失败"
+                    fi
+                else
+                    log_info "未找到 requirements.txt，跳过依赖安装"
+                fi
+
+                log_success "插件 ${CYAN}$plugin_name${NC} 安装完成"
+                read -p "按回车继续..."
+                ;;
+            2)
+                draw_header
+                echo -e "${BLUE}▶ 卸载插件${NC}"
+                if [[ ! -d "$PLUGINS_DIR" ]] || [[ -z "$(ls -A "$PLUGINS_DIR" 2>/dev/null)" ]]; then
+                    log_warning "没有已安装的插件"
+                    read -p "按回车继续..."
+                    continue
+                fi
+
+                echo -e "已安装的插件:"
+                local plugins=()
+                local idx=1
+                for dir in "$PLUGINS_DIR"/*; do
+                    if [[ -d "$dir" && "$(basename "$dir")" != "__pycache__" ]]; then
+                        local plugin_name=$(basename "$dir")
+                        plugins+=("$plugin_name")
+                        echo -e " ${GREEN}$idx.${NC} $plugin_name"
+                        idx=$((idx + 1))
+                    fi
+                done
+
+                read -p "请输入插件名称或序号: " plugin_input
+                local target_plugin=""
+
+                if [[ "$plugin_input" =~ ^[0-9]+$ ]]; then
+                    if [[ $plugin_input -ge 1 && $plugin_input -le ${#plugins[@]} ]]; then
+                        target_plugin="${plugins[$((plugin_input - 1))]}"
+                    fi
+                else
+                    target_plugin="$plugin_input"
+                fi
+
+                if [[ -z "$target_plugin" ]]; then
+                    log_error "无效的选择"
+                    read -p "按回车继续..."
+                    continue
+                fi
+
+                local target_path="$PLUGINS_DIR/$target_plugin"
+                if [[ ! -d "$target_path" ]]; then
+                    log_error "插件目录不存在: $target_plugin"
+                    read -p "按回车继续..."
+                    continue
+                fi
+
+                echo -e "\n${YELLOW}确认删除以下内容：${NC}"
+                echo -e " ${RED}$target_path${NC}"
+                echo -e "\n${RED}警告：此操作不可撤销！${NC}"
+                read -p "请输入插件名称确认删除: " confirm_name
+
+                if [[ "$confirm_name" == "$target_plugin" ]]; then
+                    rm -rf "$target_path"
+                    log_success "插件 ${CYAN}$target_plugin${NC} 已卸载"
+                else
+                    log_warning "确认失败，操作已取消"
+                fi
+                read -p "按回车继续..."
+                ;;
+            3)
+                draw_header
+                echo -e "${BLUE}▶ 安装插件依赖${NC}"
+                if [[ ! -d "$PLUGINS_DIR" ]] || [[ -z "$(ls -A "$PLUGINS_DIR" 2>/dev/null)" ]]; then
+                    log_warning "没有已安装的插件"
+                    read -p "按回车继续..."
+                    continue
+                fi
+
+                echo -e "已安装的插件:"
+                local plugins=()
+                local idx=1
+                for dir in "$PLUGINS_DIR"/*; do
+                    if [[ -d "$dir" && "$(basename "$dir")" != "__pycache__" ]]; then
+                        local plugin_name=$(basename "$dir")
+                        plugins+=("$plugin_name")
+                        echo -e " ${GREEN}$idx.${NC} $plugin_name"
+                        idx=$((idx + 1))
+                    fi
+                done
+
+                read -p "请输入插件名称或序号: " plugin_input
+                local target_plugin=""
+
+                if [[ "$plugin_input" =~ ^[0-9]+$ ]]; then
+                    if [[ $plugin_input -ge 1 && $plugin_input -le ${#plugins[@]} ]]; then
+                        target_plugin="${plugins[$((plugin_input - 1))]}"
+                    fi
+                else
+                    target_plugin="$plugin_input"
+                fi
+
+                if [[ -z "$target_plugin" ]]; then
+                    log_error "无效的选择"
+                    read -p "按回车继续..."
+                    continue
+                fi
+
+                local target_path="$PLUGINS_DIR/$target_plugin"
+                if [[ ! -d "$target_path" ]]; then
+                    log_error "插件目录不存在: $target_plugin"
+                    read -p "按回车继续..."
+                    continue
+                fi
+
+                if [[ ! -f "$target_path/requirements.txt" ]]; then
+                    log_warning "未找到 requirements.txt"
+                    read -p "按回车继续..."
+                    continue
+                fi
+
+                echo -e "\n${BLUE}正在安装 ${CYAN}$target_plugin${NC} 的依赖...${NC}"
+                source "$VENV_PATH"
+                pip install -r "$target_path/requirements.txt"
+                if [ $? -eq 0 ]; then
+                    log_success "依赖安装成功"
+                else
+                    log_error "依赖安装失败"
+                fi
+                read -p "按回车继续..."
+                ;;
+            0)
+                return
+                ;;
+        esac
+    done
+}
+
+
+# =========================================================
+# 9. 入口
 # =========================================================
 
 main_menu() {
@@ -1139,6 +1515,7 @@ main_menu() {
         echo -e "${CYAN}3.${NC} 管理 NapCat 服务   ${WHITE}(Docker Start / Stop)${NC}"
         echo -e "${BLUE}4.${NC} 配置与访问         ${WHITE}(密钥 / 黑白名单)${NC}"
         echo -e "${YELLOW}5.${NC} LPMM知识库         ${WHITE}(文本提取/导入)${NC}"
+        echo -e "${GREEN}6.${NC} 插件管理           ${WHITE}(安装/卸载/依赖)${NC}"
         draw_line
         echo -e "${WHITE}0.${NC} 退出脚本"
         echo -e ""
@@ -1163,11 +1540,11 @@ main_menu() {
                 fi ;;
             4) manage_config_access_menu ;;
             5) manage_lpmm_menu ;;
+            6) manage_plugins_menu ;;
             0) exit 0 ;;
         esac
     done
 }
-
 
 
 main_menu
