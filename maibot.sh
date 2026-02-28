@@ -1479,7 +1479,7 @@ manage_plugins_menu() {
                 fi
 
                 if [[ ! -f "$target_path/requirements.txt" ]]; then
-                    log_warning "未找到 requirements.txt"
+                    log_warning "未找到 requirements.txt，建议查看插件文档是否有依赖需求"
                     read -p "按回车继续..."
                     continue
                 fi
@@ -1509,13 +1509,13 @@ manage_plugins_menu() {
 main_menu() {
     while true; do
         draw_header
-        echo -e "${GREEN}1.${NC} 安装 / 更新 MaiBot ${WHITE}(全新部署)${NC}"
+        echo -e "${GREEN}1.${NC} 安装 / 更新 MaiBot ${NC}"
         draw_line
-        echo -e "${PURPLE}2.${NC} 管理 MaiBot 核心   ${WHITE}(Bot / Adapter / TTS)${NC}"
-        echo -e "${CYAN}3.${NC} 管理 NapCat 服务   ${WHITE}(Docker Start / Stop)${NC}"
-        echo -e "${BLUE}4.${NC} 配置与访问         ${WHITE}(密钥 / 黑白名单)${NC}"
-        echo -e "${YELLOW}5.${NC} LPMM知识库         ${WHITE}(文本提取/导入)${NC}"
-        echo -e "${GREEN}6.${NC} 插件管理           ${WHITE}(安装/卸载/依赖)${NC}"
+        echo -e "${PURPLE}2.${NC} 管理 MaiBot 核心${NC}"
+        echo -e "${CYAN}3.${NC} 管理 NapCat 服务${NC}"
+        echo -e "${BLUE}4.${NC} 配置与访问${NC}"
+        echo -e "${YELLOW}5.${NC} LPMM知识库${NC}"
+        echo -e "${GREEN}6.${NC} 插件管理${NC}"
         draw_line
         echo -e "${WHITE}0.${NC} 退出脚本"
         echo -e ""
