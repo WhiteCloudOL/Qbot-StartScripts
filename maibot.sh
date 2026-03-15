@@ -56,7 +56,7 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 draw_header() {
     clear
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.6${NC}               ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.7${NC}               ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
     
@@ -249,7 +249,16 @@ configure_install_path() {
     if [[ -n "$MAI_PATH" ]]; then default_path="$MAI_PATH"; fi
     echo -e "上次/默认安装位置: ${CYAN}$default_path${NC}"
     read -p "请输入安装路径 (回车使用默认): " user_path
-    if [[ -z "$user_path" ]]; then USER_INSTALL_PATH="$default_path"; else USER_INSTALL_PATH="${user_path/#\~/$HOME}"; fi
+    if [[ -z "$user_path" ]]; then
+        USER_INSTALL_PATH="$default_path"
+    else
+        user_path="${user_path/#\~/$HOME}"
+        if [[ "$user_path" != /* ]]; then
+            USER_INSTALL_PATH="$HOME/$user_path"
+        else
+            USER_INSTALL_PATH="$user_path"
+        fi
+    fi
     mkdir -p "$USER_INSTALL_PATH"
 }
 
