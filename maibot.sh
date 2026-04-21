@@ -36,6 +36,7 @@ TEST_FILE_PATH="https://raw.githubusercontent.com/Mai-with-u/MaiBot/refs/heads/m
 # 临时存储用户选择的变量
 USER_INSTALL_PATH=""
 USER_INSTALL_MODE=""   # normal / clean
+USER_PYTHON_ENV=""     # system / uv
 USER_VENV_MODE=""      # keep / recreate
 USER_GH_PROXY=""
 USER_PIP_DISPLAY=""    # UI显示用
@@ -72,8 +73,15 @@ draw_header() {
             echo -e " ${GREY}●${NC} 模式: ${mode_str}"
         fi
 
-        # 虚拟环境
-        if [[ -n "$USER_VENV_MODE" && "$USER_INSTALL_MODE" != "clean" ]]; then
+        # Python 运行环境
+        if [[ -n "$USER_PYTHON_ENV" ]]; then
+            local py_env_str="本机 python3"
+            [[ "$USER_PYTHON_ENV" == "uv" ]] && py_env_str="${CYAN}uv (Python 3.14)${NC}"
+            echo -e " ${GREY}●${NC} Python: ${py_env_str}"
+        fi
+
+        # 虚拟环境（仅本机 python3 模式）
+        if [[ "$USER_PYTHON_ENV" != "uv" && -n "$USER_VENV_MODE" && "$USER_INSTALL_MODE" != "clean" ]]; then
             local venv_str="保留旧环境"
             [[ "$USER_VENV_MODE" == "recreate" ]] && venv_str="${YELLOW}强制重建环境${NC}"
             echo -e " ${GREY}●${NC} 环境: ${venv_str}"
@@ -116,14 +124,61 @@ draw_line() {
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         source "$CONFIG_FILE"
-        if [[ -n "$MAI_PATH" ]]; then return 0; fi
+        if [[ -z "$MAI_PYTHON_ENV" ]]; then
+            MAI_PYTHON_ENV="system"
+        fi
+
+        # 兼容旧配置: MAI_PATH <-> USER_INSTALL_PATH
+        if [[ -z "$USER_INSTALL_PATH" && -n "$MAI_PATH" ]]; then
+            USER_INSTALL_PATH="$MAI_PATH"
+        fi
+        if [[ -z "$MAI_PATH" && -n "$USER_INSTALL_PATH" ]]; then
+            MAI_PATH="$USER_INSTALL_PATH"
+        fi
+
+        if [[ -n "$USER_INSTALL_PATH" || -n "$MAI_PATH" ]]; then return 0; fi
     fi
     return 1
 }
 
 save_config() {
     local path="$1"
-    echo "MAI_PATH=\"$path\"" > "$CONFIG_FILE"
+    local python_env="$2"
+    if [[ -z "$python_env" ]]; then
+        python_env="${USER_PYTHON_ENV:-${MAI_PYTHON_ENV:-system}}"
+    fi
+    {
+        echo "USER_INSTALL_PATH=\"$path\""
+        echo "MAI_PATH=\"$path\""
+        echo "MAI_PYTHON_ENV=\"$python_env\""
+    } > "$CONFIG_FILE"
+}
+
+ensure_uv_installed() {
+    if command -v uv &> /dev/null; then
+        return 0
+    fi
+
+    log_warning "未检测到 uv，开始自动安装..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    if [[ $? -ne 0 ]]; then
+        log_error "uv 安装失败。"
+        return 1
+    fi
+
+    # 刷新环境变量，确保当前 shell 可立即使用 uv
+    if [[ -f "$HOME/.local/bin/env" ]]; then
+        source "$HOME/.local/bin/env"
+    fi
+    hash -r
+
+    if ! command -v uv &> /dev/null; then
+        log_error "uv 已安装但当前会话仍不可用，请重新登录 shell 后重试。"
+        return 1
+    fi
+
+    log_success "uv 安装并加载完成。"
+    return 0
 }
 
 check_screen_installed() {
@@ -136,15 +191,31 @@ git_clone_safe() {
     local url="$1"
     local dir="$2"
     local branch="$3"
+    local install_path="${USER_INSTALL_PATH:-$MAI_PATH}"
+
+    if [[ -z "$install_path" ]]; then
+        load_config >/dev/null 2>&1
+        install_path="${USER_INSTALL_PATH:-$MAI_PATH}"
+    fi
+
+    if [[ -z "$install_path" ]]; then
+        log_error "未找到安装目录(USER_INSTALL_PATH/MAI_PATH)"
+        return 1
+    fi
+
+    local target_dir="$dir"
+    if [[ "$target_dir" != /* ]]; then
+        target_dir="$install_path/$dir"
+    fi
     
     # 目录存在处理逻辑
-    if [[ -d "$dir" ]]; then
+    if [[ -d "$target_dir" ]]; then
         if [[ "$USER_INSTALL_MODE" == "clean" ]]; then
-            log_warning "清理旧目录: $dir"
-            rm -rf "$dir"
+            log_warning "清理旧目录: $target_dir"
+            rm -rf "$target_dir"
         else
-            log_info "检测到目录 ${CYAN}$dir${NC} 已存在，尝试更新..."
-            cd "$dir" || return 1
+            log_info "检测到目录 ${CYAN}$target_dir${NC} 已存在，尝试更新..."
+            cd "$target_dir" || return 1
             if [[ -n "$branch" ]]; then
                 git fetch origin "$branch"
                 git checkout "$branch"
@@ -153,22 +224,23 @@ git_clone_safe() {
                 git pull
             fi
             if [ $? -eq 0 ]; then
-                cd ..; return 0
+                cd "$install_path" || return 1
+                return 0
             else
                 log_error "更新失败。"
-                cd ..
+                cd "$install_path" || return 1
                 echo -e "${YELLOW}是否删除旧文件夹并重新克隆？${NC}"
                 read -p "请输入 (y/n): " re_choice
-                if [[ "$re_choice" == "y" ]]; then rm -rf "$dir"; else return 1; fi
+                if [[ "$re_choice" == "y" ]]; then rm -rf "$target_dir"; else return 1; fi
             fi
         fi
     fi
 
     log_info "正在克隆 ${CYAN}$dir${NC} (显示进度)..."
     if [[ -n "$branch" ]]; then
-        git clone --depth 1 --progress -b "$branch" "$url" "$dir"
+        git clone --depth 1 --progress -b "$branch" "$url" "$target_dir"
     else
-        git clone --depth 1 --progress "$url" "$dir"
+        git clone --depth 1 --progress "$url" "$target_dir"
     fi
     
     if [ $? -eq 0 ]; then
@@ -176,7 +248,7 @@ git_clone_safe() {
         return 0
     else
         log_error "克隆失败！请检查网络或更换加速源。"
-        rm -rf "$dir"
+        rm -rf "$target_dir"
         echo -e "1. 重试  2. 跳过  3. 退出"
         read -p "请选择: " retry_choice
         case $retry_choice in
@@ -254,7 +326,7 @@ configure_docker_mirror() {
 
 configure_install_path() {
     draw_header
-    echo -e "${BLUE}▶ 1/5 安装目录配置${NC}"
+    echo -e "${BLUE}▶ 1/6 安装目录配置${NC}"
     local default_path="$HOME/maimai"
     load_config
     if [[ -n "$MAI_PATH" ]]; then default_path="$MAI_PATH"; fi
@@ -275,7 +347,7 @@ configure_install_path() {
 
 step_install_mode() {
     draw_header
-    echo -e "${BLUE}▶ 2/5 选择安装模式${NC}"
+    echo -e "${BLUE}▶ 2/6 选择安装模式${NC}"
     if [[ ! -d "$USER_INSTALL_PATH/MaiBot" ]]; then
         USER_INSTALL_MODE="normal"; USER_VENV_MODE="recreate"; return
     fi
@@ -292,19 +364,54 @@ step_install_mode() {
     esac
 }
 
-step_venv_mode() {
-    if [[ "$USER_INSTALL_MODE" == "clean" ]]; then return; fi
+step_python_env_mode() {
     draw_header
-    echo -e "${BLUE}▶ 3/5 Python 环境处理${NC}"
-    echo -e "${GREEN}1.${NC} 保留现有环境 ${WHITE}(速度快，适合小更新)${NC}"
-    echo -e "${YELLOW}2.${NC} 删除并重建环境 ${WHITE}(推荐，彻底解决依赖冲突)${NC}"
+    echo -e "${BLUE}▶ 3/6 Python 环境方式${NC}"
+    local default_choice="2"
+
+    if [[ -z "$USER_PYTHON_ENV" ]]; then
+        if load_config && [[ "$MAI_PYTHON_ENV" == "uv" ]]; then
+            USER_PYTHON_ENV="uv"
+        else
+            USER_PYTHON_ENV="system"
+        fi
+    fi
+
+    [[ "$USER_PYTHON_ENV" == "uv" ]] && default_choice="2"
+
+    echo -e "${GREEN}1.${NC} 本机 python3 环境"
+    echo -e "${GREEN}2.${NC} uv 环境 ${WHITE}(Python 3.14)${NC}"
+    read -p "请选择 [1-2] (默认${default_choice}): " py_choice
+    case ${py_choice:-$default_choice} in
+        2) USER_PYTHON_ENV="uv" ;;
+        *) USER_PYTHON_ENV="system" ;;
+    esac
+}
+
+step_venv_mode() {
+    if [[ "$USER_INSTALL_MODE" == "clean" ]]; then
+        USER_VENV_MODE="recreate"
+        return
+    fi
+
+    draw_header
+    if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
+        echo -e "${BLUE}▶ 4/6 uv 虚拟环境处理${NC}"
+        echo -e "${GREEN}1.${NC} 保留现有 .venv ${WHITE}(速度快，适合小更新)${NC}"
+        echo -e "${YELLOW}2.${NC} 删除并重建 .venv ${WHITE}(推荐，彻底解决依赖冲突)${NC}"
+    else
+        echo -e "${BLUE}▶ 4/6 Python 虚拟环境处理${NC}"
+        echo -e "${GREEN}1.${NC} 保留现有环境 ${WHITE}(速度快，适合小更新)${NC}"
+        echo -e "${YELLOW}2.${NC} 删除并重建环境 ${WHITE}(推荐，彻底解决依赖冲突)${NC}"
+    fi
+
     read -p "请选择 [1-2] (默认1): " venv_choice
     case ${venv_choice:-1} in 2) USER_VENV_MODE="recreate" ;; *) USER_VENV_MODE="keep" ;; esac
 }
 
 configure_github() {
     draw_header
-    echo -e "${BLUE}▶ 4/5 GitHub 线路配置${NC}"
+    echo -e "${BLUE}▶ 5/6 GitHub 线路配置${NC}"
     
     run_speedtest() {
         echo -e "${YELLOW}正在并行测速，请稍候...${NC}"
@@ -391,7 +498,18 @@ configure_github() {
 
 configure_pip() {
     draw_header
-    echo -e "${BLUE}▶ 5/5 Pip 镜像源配置${NC}"
+    echo -e "${BLUE}▶ 6/6 Python 依赖源配置${NC}"
+
+    if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
+        USER_PIP_DISPLAY="uv sync"
+        USER_PIP_INDEX=""
+        USER_PIP_HOST=""
+        echo -e "${CYAN}当前为 uv 模式，将使用 uv sync 同步依赖。${NC}"
+        echo -e "${GREY}该模式下不使用 pip 镜像配置。${NC}"
+        read -p "按回车继续..."
+        return
+    fi
+
     echo -e "${GREEN}1.${NC} 保持现状/系统默认"
     echo -e "${GREEN}2.${NC} 阿里云"
     echo -e "${GREEN}3.${NC} 清华大学"
@@ -441,10 +559,18 @@ run_install() {
 
     echo -e "\n${BLUE}▶ 开始安装系统依赖...${NC}"
     if command -v apt &> /dev/null; then
-        sudo DEBIAN_FRONTEND=noninteractive apt update -y -qq 
-        sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq python3-dev python3-venv python3-pip build-essential git wget curl screen jq
+        sudo DEBIAN_FRONTEND=noninteractive apt update -y -qq
+        if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
+            sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq build-essential git wget curl screen jq
+        else
+            sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq python3-dev python3-venv python3-pip build-essential git wget curl screen jq
+        fi
     elif command -v yum &> /dev/null; then
-         sudo yum install -y python3-devel git wget curl screen jq
+        if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
+            sudo yum install -y git wget curl screen jq
+        else
+            sudo yum install -y python3-devel git wget curl screen jq
+        fi
     fi
 
     # 目录清理
@@ -471,28 +597,47 @@ run_install() {
    
 
     echo -e "\n${BLUE}▶ 配置 Python 环境...${NC}"
-    if [[ "$USER_VENV_MODE" == "recreate" && -d "venv" ]]; then
-        log_warning "移除旧虚拟环境..."
-        rm -rf venv
-    fi
-    if [[ ! -d "venv" ]]; then 
-        echo " - 创建虚拟环境 venv..."
-        python3 -m venv venv
-    fi
-    source venv/bin/activate
-    
-    if [[ -n "$USER_PIP_INDEX" ]]; then
-        mkdir -p ~/.pip
-        echo -e "[global]\nindex-url = $USER_PIP_INDEX\ntrusted-host = $USER_PIP_HOST" > ~/.pip/pip.conf
-    fi
-    
-    echo " - 更新 pip..."
-    pip install --upgrade pip
-    
-    if [[ -f "MaiBot/requirements.txt" ]]; then pip install -r MaiBot/requirements.txt; fi
-    if [[ -f "MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt" ]]; then pip install -r MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt; fi
+    if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
+        ensure_uv_installed || return
+        cd "$USER_INSTALL_PATH/MaiBot" || exit 1
 
-    save_config "$USER_INSTALL_PATH"
+        if [[ "$USER_VENV_MODE" == "recreate" && -d ".venv" ]]; then
+            log_warning "移除旧 uv 虚拟环境..."
+            rm -rf .venv
+        fi
+
+        if [[ ! -d ".venv" ]]; then
+            echo " - 使用 uv 创建虚拟环境 (.venv, Python 3.14)..."
+            uv venv --python 3.14
+        fi
+
+        echo " - 使用 uv sync 同步依赖..."
+        uv sync
+        cd "$USER_INSTALL_PATH" || exit 1
+    else
+        if [[ "$USER_VENV_MODE" == "recreate" && -d "venv" ]]; then
+            log_warning "移除旧虚拟环境..."
+            rm -rf venv
+        fi
+        if [[ ! -d "venv" ]]; then
+            echo " - 创建虚拟环境 venv..."
+            python3 -m venv venv
+        fi
+        source venv/bin/activate
+
+        if [[ -n "$USER_PIP_INDEX" ]]; then
+            mkdir -p ~/.pip
+            echo -e "[global]\nindex-url = $USER_PIP_INDEX\ntrusted-host = $USER_PIP_HOST" > ~/.pip/pip.conf
+        fi
+
+        echo " - 更新 pip..."
+        pip install --upgrade pip
+
+        if [[ -f "MaiBot/requirements.txt" ]]; then pip install -r MaiBot/requirements.txt; fi
+        if [[ -f "MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt" ]]; then pip install -r MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt; fi
+    fi
+
+    save_config "$USER_INSTALL_PATH" "$USER_PYTHON_ENV"
     log_success "MaiBot 本体部署完成！"
     execute_napcat_install
     
@@ -1041,6 +1186,7 @@ manage_maibot_menu() {
 
     local MAIBOT_DIR="$MAI_PATH/MaiBot"
     local VENV_PATH="$MAI_PATH/venv/bin/activate"
+    local PY_ENV_MODE="${MAI_PYTHON_ENV:-system}"
     local SCREEN_NAME="maibot"
 
     start_maibot() {
@@ -1054,7 +1200,13 @@ manage_maibot_menu() {
 
         cd "$MAIBOT_DIR" || return
         screen -list | grep -q "$SCREEN_NAME" && screen -S "$SCREEN_NAME" -X quit
-        screen -dmS "$SCREEN_NAME" bash -c "source '$VENV_PATH'; echo -e '${GREEN}MaiBot 启动中...${NC}'; python3 bot.py; echo -e '${RED}MaiBot 已停止/崩溃。${NC}'; exec bash"
+
+        if [[ "$PY_ENV_MODE" == "uv" ]]; then
+            ensure_uv_installed || return
+            screen -dmS "$SCREEN_NAME" bash -c "cd '$MAIBOT_DIR'; echo -e '${GREEN}MaiBot 启动中 (uv)...${NC}'; uv run bot.py; echo -e '${RED}MaiBot 已停止/崩溃。${NC}'; exec bash"
+        else
+            screen -dmS "$SCREEN_NAME" bash -c "source '$VENV_PATH'; echo -e '${GREEN}MaiBot 启动中...${NC}'; python3 bot.py; echo -e '${RED}MaiBot 已停止/崩溃。${NC}'; exec bash"
+        fi
         sleep 1
 
         if [[ "$run_mode" == "2" ]]; then
@@ -1125,8 +1277,11 @@ manage_lpmm_menu() {
     local RAW_DIR="$DATA_DIR/lpmm_raw_data"
     local OPENIE_DIR="$DATA_DIR/openie"
     local VENV_PATH="$MAI_PATH/venv/bin/activate"
+    local PY_ENV_MODE="${MAI_PYTHON_ENV:-system}"
     local SCRIPT_INFO="$MAIBOT_DIR/scripts/info_extraction.py"
     local SCRIPT_IMPORT="$MAIBOT_DIR/scripts/import_openie.py"
+    local SCRIPT_INFO_REL="scripts/info_extraction.py"
+    local SCRIPT_IMPORT_REL="scripts/import_openie.py"
 
     # 检查必要目录和脚本是否存在
     if [[ ! -d "$MAIBOT_DIR" ]]; then
@@ -1209,8 +1364,13 @@ manage_lpmm_menu() {
                 draw_header
                 echo -e "${BLUE}▶ 文本分割与实体提取 (前台)${NC}"
                 echo -e "${YELLOW}注意：此过程可能耗时较长，请勿关闭终端窗口！${NC}"
-                echo -e "正在激活虚拟环境并运行脚本...\n"
-                bash -c "source '$VENV_PATH' && python '$SCRIPT_INFO'"
+                if [[ "$PY_ENV_MODE" == "uv" ]]; then
+                    echo -e "正在使用 uv 运行脚本...\n"
+                    cd "$MAIBOT_DIR" && uv run "$SCRIPT_INFO_REL"
+                else
+                    echo -e "正在激活虚拟环境并运行脚本...\n"
+                    bash -c "source '$VENV_PATH' && python '$SCRIPT_INFO'"
+                fi
                 echo -e "\n${GREEN}脚本执行完毕。${NC}"
                 read -p "按回车继续..."
                 ;;
@@ -1242,7 +1402,12 @@ manage_lpmm_menu() {
                         2)
                             screen -S mai-lpmm-info -X quit 2>/dev/null
                             log_info "已关闭旧会话，重新启动..."
-                            screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
+                            if [[ "$PY_ENV_MODE" == "uv" ]]; then
+                                ensure_uv_installed || { read -p "按回车继续..."; continue; }
+                                screen -dmS mai-lpmm-info bash -c "cd '$MAIBOT_DIR'; uv run '$SCRIPT_INFO_REL'"
+                            else
+                                screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
+                            fi
                             log_success "已在后台启动，会话名: mai-lpmm-info"
                             echo -e "查看进度: ${CYAN}screen -r mai-lpmm-info${NC}"
                             echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
@@ -1254,7 +1419,12 @@ manage_lpmm_menu() {
                         3) ;;
                     esac
                 else
-                    screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
+                    if [[ "$PY_ENV_MODE" == "uv" ]]; then
+                        ensure_uv_installed || { read -p "按回车继续..."; continue; }
+                        screen -dmS mai-lpmm-info bash -c "cd '$MAIBOT_DIR'; uv run '$SCRIPT_INFO_REL'"
+                    else
+                        screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
+                    fi
                     log_success "已在后台启动，会话名: mai-lpmm-info"
                     echo -e "查看进度: ${CYAN}screen -r mai-lpmm-info${NC}"
                     echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
@@ -1285,8 +1455,13 @@ manage_lpmm_menu() {
                 draw_header
                 echo -e "${BLUE}▶ 导入LPMM知识库 (前台)${NC}"
                 echo -e "${YELLOW}注意：此过程可能耗时较长，请勿关闭终端窗口！${NC}"
-                echo -e "正在激活虚拟环境并运行脚本...\n"
-                bash -c "source '$VENV_PATH' && python '$SCRIPT_IMPORT'"
+                if [[ "$PY_ENV_MODE" == "uv" ]]; then
+                    echo -e "正在使用 uv 运行脚本...\n"
+                    cd "$MAIBOT_DIR" && uv run "$SCRIPT_IMPORT_REL"
+                else
+                    echo -e "正在激活虚拟环境并运行脚本...\n"
+                    bash -c "source '$VENV_PATH' && python '$SCRIPT_IMPORT'"
+                fi
                 echo -e "\n${GREEN}脚本执行完毕。${NC}"
                 read -p "按回车继续..."
                 ;;
@@ -1318,7 +1493,12 @@ manage_lpmm_menu() {
                         2)
                             screen -S mai-lpmm-import -X quit 2>/dev/null
                             log_info "已关闭旧会话，重新启动..."
-                            screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
+                            if [[ "$PY_ENV_MODE" == "uv" ]]; then
+                                ensure_uv_installed || { read -p "按回车继续..."; continue; }
+                                screen -dmS mai-lpmm-import bash -c "cd '$MAIBOT_DIR'; uv run '$SCRIPT_IMPORT_REL'"
+                            else
+                                screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
+                            fi
                             log_success "已在后台启动，会话名: mai-lpmm-import"
                             echo -e "查看进度: ${CYAN}screen -r mai-lpmm-import${NC}"
                             echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
@@ -1330,7 +1510,12 @@ manage_lpmm_menu() {
                         3) ;;
                     esac
                 else
-                    screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
+                    if [[ "$PY_ENV_MODE" == "uv" ]]; then
+                        ensure_uv_installed || { read -p "按回车继续..."; continue; }
+                        screen -dmS mai-lpmm-import bash -c "cd '$MAIBOT_DIR'; uv run '$SCRIPT_IMPORT_REL'"
+                    else
+                        screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
+                    fi
                     log_success "已在后台启动，会话名: mai-lpmm-import"
                     echo -e "查看进度: ${CYAN}screen -r mai-lpmm-import${NC}"
                     echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
@@ -1377,6 +1562,7 @@ manage_plugins_menu() {
     local MAIBOT_DIR="$MAI_PATH/MaiBot"
     local PLUGINS_DIR="$MAIBOT_DIR/plugins"
     local VENV_PATH="$MAI_PATH/venv/bin/activate"
+    local PY_ENV_MODE="${MAI_PYTHON_ENV:-system}"
 
     if [[ ! -d "$MAIBOT_DIR" ]]; then
         log_error "MaiBot 目录不存在: $MAIBOT_DIR"
@@ -1598,8 +1784,15 @@ manage_plugins_menu() {
 
                 if [[ -f "$plugin_path/requirements.txt" ]]; then
                     echo -e "\n${BLUE}▶ 安装插件依赖${NC}"
-                    source "$VENV_PATH"
-                    pip install -r "$plugin_path/requirements.txt"
+                    if [[ "$PY_ENV_MODE" == "uv" ]]; then
+                        ensure_uv_installed || { read -p "按回车继续..."; continue; }
+                        cd "$MAIBOT_DIR" || continue
+                        uv pip install -r "$plugin_path/requirements.txt"
+                    else
+                        source "$VENV_PATH"
+                        pip install -r "$plugin_path/requirements.txt"
+                    fi
+
                     if [ $? -eq 0 ]; then
                         log_success "依赖安装成功"
                     else
@@ -1722,8 +1915,14 @@ manage_plugins_menu() {
                 fi
 
                 echo -e "\n${BLUE}正在安装 ${CYAN}$target_plugin${NC} 的依赖...${NC}"
-                source "$VENV_PATH"
-                pip install -r "$target_path/requirements.txt"
+                if [[ "$PY_ENV_MODE" == "uv" ]]; then
+                    ensure_uv_installed || { read -p "按回车继续..."; continue; }
+                    cd "$MAIBOT_DIR" || continue
+                    uv pip install -r "$target_path/requirements.txt"
+                else
+                    source "$VENV_PATH"
+                    pip install -r "$target_path/requirements.txt"
+                fi
                 if [ $? -eq 0 ]; then
                     log_success "依赖安装成功"
                 else
@@ -1763,6 +1962,7 @@ main_menu() {
                 INSTALLATION_ACTIVE=true
                 configure_install_path
                 step_install_mode
+                step_python_env_mode
                 step_venv_mode
                 configure_github
                 configure_pip
