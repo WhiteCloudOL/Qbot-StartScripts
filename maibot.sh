@@ -56,11 +56,11 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 draw_header() {
     clear
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.7${NC}               ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.8${NC}               ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
     
-    # 状态栏 (面包屑导航) - 仅在安装流程中且已设置路径时显示
+    # 状态栏
     if [[ "$INSTALLATION_ACTIVE" == "true" && -n "$USER_INSTALL_PATH" ]]; then
         echo -e "${WHITE} 配置预览:${NC}"
         echo -e " ${GREY}●${NC} 目录: ${CYAN}${USER_INSTALL_PATH}${NC}"
@@ -131,10 +131,11 @@ check_screen_installed() {
     return 0
 }
 
-# 增强版 Git Clone
+# Git Clone
 git_clone_safe() {
     local url="$1"
     local dir="$2"
+    local branch="$3"
     
     # 目录存在处理逻辑
     if [[ -d "$dir" ]]; then
@@ -144,7 +145,13 @@ git_clone_safe() {
         else
             log_info "检测到目录 ${CYAN}$dir${NC} 已存在，尝试更新..."
             cd "$dir" || return 1
-            git pull
+            if [[ -n "$branch" ]]; then
+                git fetch origin "$branch"
+                git checkout "$branch"
+                git pull origin "$branch"
+            else
+                git pull
+            fi
             if [ $? -eq 0 ]; then
                 cd ..; return 0
             else
@@ -158,7 +165,11 @@ git_clone_safe() {
     fi
 
     log_info "正在克隆 ${CYAN}$dir${NC} (显示进度)..."
-    git clone --depth 1 --progress "$url" "$dir"
+    if [[ -n "$branch" ]]; then
+        git clone --depth 1 --progress -b "$branch" "$url" "$dir"
+    else
+        git clone --depth 1 --progress "$url" "$dir"
+    fi
     
     if [ $? -eq 0 ]; then
         log_success "$dir 克隆成功"
@@ -176,7 +187,7 @@ git_clone_safe() {
     fi
 }
 
-# 增强版 Docker Compose Up
+# Docker Compose Up
 docker_compose_safe() {
     local work_dir="$1"
     cd "$work_dir" || return 1
@@ -341,7 +352,7 @@ configure_github() {
                 if [[ "$ms" == "9999" ]]; then
                     echo -e " ${RED}超时/失败${NC}| $url"
                 else
-                    # 设置最佳镜像 (取第一个非超时的)
+                    # 设置最佳镜像
                     if [[ -z "$best_mirror" ]]; then
                         best_mirror=$url
                         best_ms=$ms
@@ -404,6 +415,17 @@ configure_napcat_selection() {
     USER_NAPCAT_MODE=${nc_choice:-1}
 }
 
+prepare_napcat_docker() {
+    if [[ "$USER_NAPCAT_MODE" != "1" ]]; then return; fi
+    draw_header
+    echo -e "${BLUE}▶ Docker 环境准备${NC}"
+    if ! command -v docker &> /dev/null; then
+        log_warning "未检测到 Docker，准备安装..."
+        install_docker_safe
+    fi
+    configure_docker_mirror
+}
+
 # =========================================================
 # 4. 执行安装模块
 # =========================================================
@@ -419,7 +441,7 @@ run_install() {
 
     echo -e "\n${BLUE}▶ 开始安装系统依赖...${NC}"
     if command -v apt &> /dev/null; then
-        sudo DEBIAN_FRONTEND=noninteractive apt update -y -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt update -y -qq 
         sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq python3-dev python3-venv python3-pip build-essential git wget curl screen jq
     elif command -v yum &> /dev/null; then
          sudo yum install -y python3-devel git wget curl screen jq
@@ -441,26 +463,12 @@ run_install() {
     }
 
     echo -e "\n${BLUE}▶ 下载/更新组件...${NC}"
-    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot')" "MaiBot"
-    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot-Napcat-Adapter')" "MaiBot-Napcat-Adapter"
+    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot')" "MaiBot" "main"
+    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot-Napcat-Adapter')" "MaiBot/plugins/MaiBot-Napcat-Adapter" "plugin"
     
     echo -e "\n${BLUE}▶ 初始化配置文件...${NC}"
-    copy_conf() {
-        if [[ ! -f "$2" ]] && [[ -f "$1" ]]; then
-            mkdir -p "$(dirname "$2")"
-            cp "$1" "$2"
-            echo " - 生成配置: $2"
-            return 0
-        fi
-        return 1
-    }
     
-    copy_conf "MaiBot/template/bot_config_template.toml" "MaiBot/config/bot_config.toml"
-    copy_conf "MaiBot/template/model_config_template.toml" "MaiBot/config/model_config.toml"
-    if copy_conf "MaiBot/template/template.env" "MaiBot/.env"; then
-        sed -i 's/WEBUI_HOST=127.0.0.1/WEBUI_HOST=0.0.0.0/g' "MaiBot/.env"
-    fi
-    copy_conf "MaiBot-Napcat-Adapter/template/template_config.toml" "MaiBot-Napcat-Adapter/config.toml"
+   
 
     echo -e "\n${BLUE}▶ 配置 Python 环境...${NC}"
     if [[ "$USER_VENV_MODE" == "recreate" && -d "venv" ]]; then
@@ -482,7 +490,7 @@ run_install() {
     pip install --upgrade pip
     
     if [[ -f "MaiBot/requirements.txt" ]]; then pip install -r MaiBot/requirements.txt; fi
-    if [[ -f "MaiBot-Napcat-Adapter/requirements.txt" ]]; then pip install -r MaiBot-Napcat-Adapter/requirements.txt; fi
+    if [[ -f "MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt" ]]; then pip install -r MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt; fi
 
     save_config "$USER_INSTALL_PATH"
     log_success "MaiBot 本体部署完成！"
@@ -501,11 +509,6 @@ execute_napcat_install() {
 
     case $USER_NAPCAT_MODE in
         1)
-            if ! command -v docker &> /dev/null; then
-                log_warning "未检测到 Docker，准备安装..."
-                install_docker_safe
-            fi
-            configure_docker_mirror
             mkdir -p "$NAPCAT_DIR"
             log_info "生成 docker-compose.yml..."
             # 移除 WEBUI_TOKEN，修改 UID/GID
@@ -552,7 +555,7 @@ get_ip() {
 manage_config_access_menu() {
     if ! load_config; then log_error "未找到配置"; return; fi
     local MAIBOT_DIR="$MAI_PATH/MaiBot"
-    local ADAPTER_DIR="$MAI_PATH/MaiBot-Napcat-Adapter"
+    local ADAPTER_DIR="$MAI_PATH/MaiBot/plugins/MaiBot-Napcat-Adapter"
     local NAPCAT_DIR="$MAI_PATH/NapCat"
     local PUBLIC_IP=$(get_ip)
 
@@ -576,20 +579,66 @@ manage_config_access_menu() {
                 
                 # --- Part A: MaiBot ---
                 echo -e "\n${PURPLE}● MaiBot WebUI${NC}"
-                if [[ -f "$MAIBOT_DIR/.env" ]] && [[ -f "$MAIBOT_DIR/data/webui.json" ]]; then
-                    local port=$(grep "WEBUI_PORT" "$MAIBOT_DIR/.env" | cut -d'=' -f2 | tr -d ' "')
+                local bot_cfg="$MAIBOT_DIR/config/bot_config.toml"
+                local webui_json="$MAIBOT_DIR/data/webui.json"
+                if [[ -f "$bot_cfg" ]]; then
+                    local webui_host=""
+                    local port=""
                     local token=""
-                    if command -v jq &>/dev/null; then
-                        token=$(jq -r '.access_token' "$MAIBOT_DIR/data/webui.json")
+
+                    webui_host=$(awk '
+                        /^\[webui\]/ {in_webui=1; next}
+                        /^\[/ {if (in_webui) exit; in_webui=0}
+                        in_webui && $0 ~ /^[[:space:]]*host[[:space:]]*=/ {
+                            line=$0
+                            sub(/^[^=]*=[[:space:]]*/, "", line)
+                            sub(/[[:space:]]*#.*/, "", line)
+                            gsub(/["[:space:]]/, "", line)
+                            print line
+                            exit
+                        }
+                    ' "$bot_cfg")
+
+                    port=$(awk '
+                        /^\[webui\]/ {in_webui=1; next}
+                        /^\[/ {if (in_webui) exit; in_webui=0}
+                        in_webui && $0 ~ /^[[:space:]]*port[[:space:]]*=/ {
+                            line=$0
+                            sub(/^[^=]*=[[:space:]]*/, "", line)
+                            sub(/[[:space:]]*#.*/, "", line)
+                            gsub(/["[:space:]]/, "", line)
+                            print line
+                            exit
+                        }
+                    ' "$bot_cfg")
+
+                    [[ -z "$webui_host" ]] && webui_host="0.0.0.0"
+                    [[ -z "$port" ]] && port="8001"
+
+                    if [[ -f "$webui_json" ]]; then
+                        if command -v jq &>/dev/null; then
+                            token=$(jq -r '.access_token' "$webui_json")
+                        else
+                            token=$(python3 -c "import json; print(json.load(open('$webui_json'))['access_token'])" 2>/dev/null)
+                        fi
                     else
-                         token=$(python3 -c "import json; print(json.load(open('$MAIBOT_DIR/data/webui.json'))['access_token'])" 2>/dev/null)
+                        token="(未生成，请先启动 MaiBot 本体)"
                     fi
-                    
-                    if [[ -z "$port" ]]; then port="8001 (默认)"; fi
-                    echo -e "  访问地址: ${CYAN}http://${PUBLIC_IP}:${port}${NC}"
+
+                    local display_host="$PUBLIC_IP"
+                    if [[ "$webui_host" == "127.0.0.1" || "$webui_host" == "localhost" ]]; then
+                        display_host="$webui_host"
+                    fi
+
+                    echo -e "  访问地址: ${CYAN}http://${display_host}:${port}${NC}"
                     echo -e "  访问密钥: ${YELLOW}${token}${NC}"
+
+                    if [[ "$webui_host" == "127.0.0.1" || "$webui_host" == "localhost" ]]; then
+                        echo -e "  ${YELLOW}当前 WebUI host=$webui_host，仅本机可访问，无法远程访问。${NC}"
+                        echo -e "  ${YELLOW}请修改 $bot_cfg 中 [webui] 的 host（如 0.0.0.0）后重启 MaiBot。${NC}"
+                    fi
                 else
-                    echo -e "  ${YELLOW}未找到 MaiBot 配置文件 (可能未启动过本体)${NC}"
+                    echo -e "  ${YELLOW}未找到 MaiBot 配置文件: $bot_cfg${NC}"
                 fi
                 
                 draw_line 
@@ -802,50 +851,47 @@ manage_maibot_menu() {
     if ! check_screen_installed; then log_error "请先安装 screen"; return; fi
 
     local MAIBOT_DIR="$MAI_PATH/MaiBot"
-    local ADAPTER_DIR="$MAI_PATH/MaiBot-Napcat-Adapter"
-    local TTS_ADAPTER_DIR="$MAI_PATH/maimbot_tts_adapter"
     local VENV_PATH="$MAI_PATH/venv/bin/activate"
+    local SCREEN_NAME="maibot"
 
-    start_py_service() {
-        local name="$1"; local screen_name="$2"; local dir="$3"; local script="$4"
-        if [[ ! -d "$dir" ]]; then log_warning "$name 目录不存在"; return; fi
-        
-        if [[ "$name" == "MaiBot" ]]; then
-             echo -e "${YELLOW}⚠️  启动提示 ⚠️${NC}"
-             echo -e "如果是首次启动 MaiBot，你需要同意 ${CYAN}用户协议(EULA)${NC}。"
-             echo -e "1. 正常后台启动 (已同意过)"
-             echo -e "2. 启动并进入控制台 (首次运行选这个)"
-             read -p "请选择 [1/2]: " run_mode
-             cd "$dir" || return
-             screen -list | grep -q "$screen_name" && screen -S "$screen_name" -X quit
-             screen -dmS "$screen_name" bash -c "source '$VENV_PATH'; echo -e '${GREEN}$name 启动中...${NC}'; python3 $script; echo -e '${RED}$name 已停止/崩溃。${NC}'; exec bash"
-             sleep 1
-             if [[ "$run_mode" == "2" ]]; then
-                 echo -e "${GREEN}即将进入控制台... 按 Ctrl+A 然后 D 退出${NC}"
-                 read -p "按回车立即进入..." 
-                 screen -r "$screen_name"
-             else log_success "$name 已在后台启动"; fi
-             return
-        fi
+    start_maibot() {
+        if [[ ! -d "$MAIBOT_DIR" ]]; then log_warning "MaiBot 目录不存在"; return; fi
 
-        cd "$dir" || return
-        screen -list | grep -q "$screen_name" && screen -S "$screen_name" -X quit
-        echo -e "${BLUE}启动 $name...${NC}"
-        screen -dmS "$screen_name" bash -c "source '$VENV_PATH'; echo -e '${GREEN}$name 启动中...${NC}'; python3 $script; echo -e '${RED}$name 已停止/崩溃。${NC}'; exec bash"
+        echo -e "${YELLOW}⚠️  启动提示 ⚠️${NC}"
+        echo -e "如果是首次启动 MaiBot，你需要同意 ${CYAN}用户协议(EULA)${NC}。"
+        echo -e "1. 正常后台启动 (已同意过)"
+        echo -e "2. 启动并进入控制台 (首次运行选这个)"
+        read -p "请选择 [1/2]: " run_mode
+
+        cd "$MAIBOT_DIR" || return
+        screen -list | grep -q "$SCREEN_NAME" && screen -S "$SCREEN_NAME" -X quit
+        screen -dmS "$SCREEN_NAME" bash -c "source '$VENV_PATH'; echo -e '${GREEN}MaiBot 启动中...${NC}'; python3 bot.py; echo -e '${RED}MaiBot 已停止/崩溃。${NC}'; exec bash"
         sleep 1
+
+        if [[ "$run_mode" == "2" ]]; then
+            echo -e "${GREEN}即将进入控制台... 按 Ctrl+A 然后 D 退出${NC}"
+            read -p "按回车立即进入..."
+            screen -r "$SCREEN_NAME"
+        else
+            log_success "MaiBot 已在后台启动"
+        fi
     }
 
-    stop_py_service() {
-        local name="$1"; local screen_name="$2"
-        if screen -list | grep -q "$screen_name"; then screen -S "$screen_name" -X quit; log_success "已停止 $name"; else echo -e "$name 未运行"; fi
+    stop_maibot() {
+        if screen -list | grep -q "$SCREEN_NAME"; then
+            screen -S "$SCREEN_NAME" -X quit
+            log_success "已停止 MaiBot"
+        else
+            echo -e "MaiBot 未运行"
+        fi
     }
 
     check_maibot_status() {
-        local services=("mai-main:MaiBot(本体)" "mai-adapter:Adapter(适配器)" "mai-tts:TTS(语音)")
-        for s in "${services[@]}"; do
-            local screen_name=${s%%:*}; local display_name=${s##*:}
-            if screen -list | grep -q "$screen_name"; then echo -e " $display_name:\t${GREEN}● 运行中${NC}"; else echo -e " $display_name:\t${RED}○ 未运行${NC}"; fi
-        done
+        if screen -list | grep -q "$SCREEN_NAME"; then
+            echo -e " MaiBot(本体):\t${GREEN}● 运行中${NC}"
+        else
+            echo -e " MaiBot(本体):\t${RED}○ 未运行${NC}"
+        fi
     }
 
     while true; do
@@ -853,27 +899,20 @@ manage_maibot_menu() {
         echo -e "${BLUE}▶ MaiBot 核心管理${NC}"
         check_maibot_status
         draw_line
-        echo -e "${GREEN}1.${NC} 一键开启 ${WHITE}(Bot + Adapter)${NC}"
-        echo -e "${GREEN}2.${NC} 一键停止 ${WHITE}(所有服务)${NC}"
+        echo -e "${GREEN}1.${NC} 启动 MaiBot 本体"
+        echo -e "${GREEN}2.${NC} 停止 MaiBot 本体"
+        echo -e "${YELLOW}3.${NC} 进入 Screen 控制台 ${WHITE}(查看报错)${NC}"
         draw_line
-        echo -e "${CYAN}3.${NC} 开启 MaiBot 本体      ${CYAN}4.${NC} 停止 MaiBot 本体"
-        echo -e "${CYAN}5.${NC} 开启 Adapter 适配器   ${CYAN}6.${NC} 停止 Adapter 适配器"
-        draw_line
-        echo -e "${YELLOW}9.${NC} 进入 Screen 控制台 ${WHITE}(查看报错)${NC}"
         echo -e "${WHITE}0.${NC} 返回主菜单"
         echo -e ""
         read -p " 请选择: " m_choice
         case $m_choice in
-            1) start_py_service "MaiBot" "mai-main" "$MAIBOT_DIR" "bot.py"; start_py_service "Adapter" "mai-adapter" "$ADAPTER_DIR" "main.py"; if [[ -d "$TTS_ADAPTER_DIR" ]]; then start_py_service "TTS" "mai-tts" "$TTS_ADAPTER_DIR" "main.py"; fi ;;
-            2) stop_py_service "MaiBot" "mai-main"; stop_py_service "Adapter" "mai-adapter"; stop_py_service "TTS" "mai-tts" ;;
-            3) start_py_service "MaiBot" "mai-main" "$MAIBOT_DIR" "bot.py" ;;
-            4) stop_py_service "MaiBot" "mai-main" ;;
-            5) start_py_service "Adapter" "mai-adapter" "$ADAPTER_DIR" "main.py" ;;
-            6) stop_py_service "Adapter" "mai-adapter" ;;
-            9) echo -e "a. MaiBot\nb. Adapter"; read -p "选择窗口: " v; if [[ "$v" == "a" ]]; then screen -r "mai-main"; elif [[ "$v" == "b" ]]; then screen -r "mai-adapter"; fi ;;
+            1) start_maibot ;;
+            2) stop_maibot ;;
+            3) screen -r "$SCREEN_NAME" ;;
             0) return ;;
         esac
-        if [[ "$m_choice" != "9" && "$m_choice" != "0" ]]; then read -p "操作已执行，按回车继续..."; fi
+        if [[ "$m_choice" != "3" && "$m_choice" != "0" ]]; then read -p "操作已执行，按回车继续..."; fi
     done
 }
 
@@ -1539,6 +1578,7 @@ main_menu() {
                 configure_github
                 configure_pip
                 configure_napcat_selection
+                prepare_napcat_docker
                 run_install
                 INSTALLATION_ACTIVE=false
                 ;;
