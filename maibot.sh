@@ -1,7 +1,7 @@
 #!/bin/bash
 #License: GNU GENERAL PUBLIC LICENSE Version 3
 #Author: 清蒸云鸭
-#Edited with Gemini
+#with VibeCoding
 #Update: 2026-01-20
 
 # =========================================================
@@ -30,7 +30,7 @@ GITHUB_MIRRORS=(
     "https://github.moeyy.xyz"
 )
 
-# 更新测速目标文件
+# 测速目标文件
 TEST_FILE_PATH="https://raw.githubusercontent.com/Mai-with-u/MaiBot/refs/heads/main/README.md"
 
 # 临时存储用户选择的变量
@@ -543,7 +543,7 @@ EOF
 }
 
 # =========================================================
-# 5. 配置与访问菜单 (合并修改版)
+# 5. 配置与访问菜单
 # =========================================================
 
 get_ip() {
@@ -564,9 +564,9 @@ manage_config_access_menu() {
         echo -e "${BLUE}▶ 配置与访问${NC}"
         echo -e " 公网IP: ${CYAN}${PUBLIC_IP}${NC}"
         draw_line
-        # 合并后的选项1
         echo -e "${GREEN}1.${NC} 查看 WebUI 访问信息 (MaiBot & NapCat)"
-        echo -e "${GREEN}2.${NC} 修改 Adapter 配置 (黑白名单管理)"
+        echo -e "${GREEN}2.${NC} 初始化MaiBot访问配置"
+        echo -e "${GREEN}3.${NC} 修改 Adapter 配置 (黑白名单管理)"
         draw_line
         echo -e "${WHITE}0.${NC} 返回上一级"
         echo -e ""
@@ -635,7 +635,7 @@ manage_config_access_menu() {
 
                     if [[ "$webui_host" == "127.0.0.1" || "$webui_host" == "localhost" ]]; then
                         echo -e "  ${YELLOW}当前 WebUI host=$webui_host，仅本机可访问，无法远程访问。${NC}"
-                        echo -e "  ${YELLOW}请修改 $bot_cfg 中 [webui] 的 host（如 0.0.0.0）后重启 MaiBot。${NC}"
+                        echo -e "  ${YELLOW}请修改 $bot_cfg 中 [webui] 的 host 为 0.0.0.0 后重启 MaiBot。${NC}"
                     fi
                 else
                     echo -e "  ${YELLOW}未找到 MaiBot 配置文件: $bot_cfg${NC}"
@@ -667,109 +667,298 @@ manage_config_access_menu() {
                 read -p "按回车返回..."
                 ;;
             2)
-                modify_adapter_config "$ADAPTER_DIR/config.toml"
+                initialize_maibot_access_config
+                ;;
+            3)
+                modify_adapter_config
                 ;;
             0) return ;;
         esac
     done
 }
 
+initialize_maibot_access_config() {
+    if ! load_config; then
+        log_error "未找到配置"
+        sleep 2
+        return
+    fi
+
+    local bot_cfg="$MAI_PATH/MaiBot/config/bot_config.toml"
+    local adapter_dir="$MAI_PATH/MaiBot/plugins/MaiBot-Napcat-Adapter"
+    local adapter_cfg="$adapter_dir/config.toml"
+
+    draw_header
+    echo -e "${BLUE}▶ 初始化MaiBot访问配置${NC}"
+    draw_line
+
+    # a. 修改 MaiBot WebUI host
+    if [[ ! -f "$bot_cfg" ]]; then
+        echo -e "${YELLOW}MaiBot暂未完成初始化，请启动一次MaiBot并同意用户许可协议(EULA)${NC}"
+    else
+        python3 - <<EOF
+import re
+path = "$bot_cfg"
+with open(path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+
+webui_start = None
+webui_end = len(lines)
+for i, line in enumerate(lines):
+    if re.match(r'^\s*\[webui\]\s*$', line):
+        webui_start = i
+        break
+
+if webui_start is None:
+    print("未找到 [webui] 段，已跳过 MaiBot WebUI host 初始化。")
+else:
+    for j in range(webui_start + 1, len(lines)):
+        if re.match(r'^\s*\[.+\]\s*$', lines[j]):
+            webui_end = j
+            break
+
+    host_found = False
+    changed = False
+    for k in range(webui_start + 1, webui_end):
+        m = re.match(r'^(\s*host\s*=\s*)([^#\n]*)(\s*(#.*)?)$', lines[k])
+        if m:
+            host_found = True
+            current = m.group(2).strip().strip('"').strip("'")
+            if current != "0.0.0.0":
+                lines[k] = f'{m.group(1)}"0.0.0.0"{m.group(3)}\n'
+                changed = True
+            break
+
+    if not host_found:
+        lines.insert(webui_start + 1, 'host = "0.0.0.0"\n')
+        changed = True
+
+    if changed:
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        print("已完成 MaiBot WebUI host 初始化: 0.0.0.0")
+    else:
+        print("MaiBot WebUI host 已是 0.0.0.0，无需修改")
+EOF
+    fi
+
+    draw_line
+
+    # b. 修改 Adapter 配置
+    if [[ ! -d "$adapter_dir" ]]; then
+        echo -e "${YELLOW}未找到MaiBot-Napcat-Adapter插件，请重新执行一次安装程序以安装${NC}"
+    elif [[ ! -f "$adapter_cfg" ]]; then
+        echo -e "${YELLOW}MaiBot-Napcat-Adapter插件暂未完成初始化，请启动一次MaiBot并同意用户许可协议(EULA)${NC}"
+    else
+        python3 - <<EOF
+import re
+path = "$adapter_cfg"
+with open(path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+
+def find_section(name):
+    start = None
+    end = len(lines)
+    for i, line in enumerate(lines):
+        if re.match(r'^\s*\[' + re.escape(name) + r'\]\s*$', line):
+            start = i
+            break
+    if start is None:
+        return None, None
+    for j in range(start + 1, len(lines)):
+        if re.match(r'^\s*\[.+\]\s*$', lines[j]):
+            end = j
+            break
+    return start, end
+
+def set_key(section, key, value_text):
+    s, e = find_section(section)
+    if s is None:
+        return False, False
+    found = False
+    changed = False
+    for i in range(s + 1, e):
+        m = re.match(r'^(\s*' + re.escape(key) + r'\s*=\s*)([^#\n]*)(\s*(#.*)?)$', lines[i])
+        if m:
+            found = True
+            old = m.group(2).strip()
+            if old != value_text:
+                lines[i] = f'{m.group(1)}{value_text}{m.group(3)}\n'
+                changed = True
+            break
+    if not found:
+        lines.insert(s + 1, f'{key} = {value_text}\n')
+        changed = True
+    return True, changed
+
+ok1, ch1 = set_key("plugin", "enabled", "true")
+
+if not ok1:
+    print("未找到 [plugin] 段，已跳过 enabled 初始化。")
+
+if ch1:
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    print("已完成 Adapter 访问配置初始化（enabled=true）")
+else:
+    print("Adapter enabled 已是 true，无需修改")
+EOF
+    fi
+
+    draw_line
+    echo -e "${YELLOW}以上所有修改完成后，请手动前往主菜单 [2. 管理 MaiBot 核心] 重新启动一次MaiBot。${NC}"
+    read -p "按回车返回..."
+}
+
 modify_adapter_config() {
-    local config_file="$1"
-    if [[ ! -f "$config_file" ]]; then log_error "找不到配置文件: $config_file"; sleep 2; return; fi
+    if ! load_config; then
+        log_error "未找到配置"
+        sleep 2
+        return
+    fi
+
+    local adapter_dir="$MAI_PATH/MaiBot/plugins/MaiBot-Napcat-Adapter"
+    local config_file="$adapter_dir/config.toml"
+
+    if [[ ! -d "$adapter_dir" ]]; then
+        log_error "未找到MaiBot-Napcat-Adapter插件，请重新执行一次安装程序以安装"
+        sleep 2
+        return
+    fi
+    if [[ ! -f "$config_file" ]]; then
+        log_error "MaiBot-Napcat-Adapter插件暂未完成初始化，请启动一次MaiBot并同意用户许可协议(EULA)"
+        sleep 2
+        return
+    fi
 
     while true; do
         draw_header
-        echo -e "${BLUE}▶ Adapter 名单管理${NC}"
-        # --- 读取部分保持不变 ---
+        echo -e "${BLUE}▶ Adapter 黑白名单管理${NC}"
         python3 - <<EOF
 import re
 try:
-    with open("$config_file", 'r', encoding='utf-8') as f:
+    with open("$config_file", "r", encoding="utf-8") as f:
         content = f.read()
-    def find_list(key):
-        match = re.search(r'^\s*' + key + r'\s*=\s*\[(.*?)\]', content, re.MULTILINE | re.DOTALL)
-        return match.group(1).replace('\n', '').strip() if match else "Not Found"
-    def find_val(key):
-        match = re.search(r'^\s*' + key + r'\s*=\s*"(.*?)"', content, re.MULTILINE)
-        return match.group(1) if match else "Unknown"
 
-    print(f" 1. 群聊模式: \033[1;36m{find_val('group_list_type')}\033[0m")
-    print(f"    群聊列表: \033[1;33m[{find_list('group_list')}]\033[0m")
-    print(f" 2. 私聊模式: \033[1;36m{find_val('private_list_type')}\033[0m")
-    print(f"    私聊列表: \033[1;33m[{find_list('private_list')}]\033[0m")
+    def find_val(key):
+        m = re.search(r'^\\s*' + re.escape(key) + r'\\s*=\\s*"(.*?)"', content, re.MULTILINE)
+        return m.group(1) if m else "Unknown"
+
+    def find_list(key):
+        m = re.search(r'^\\s*' + re.escape(key) + r'\\s*=\\s*\\[(.*?)\\]', content, re.MULTILINE | re.DOTALL)
+        if not m:
+            return "Not Found"
+        return m.group(1).replace("\\n", "").strip()
+
+    print(f" 群聊模式: \\033[1;36m{find_val('group_list_type')}\\033[0m")
+    print(f" 群聊列表: \\033[1;33m[{find_list('group_list')}]\\033[0m")
+    print(f" 私聊模式: \\033[1;36m{find_val('private_list_type')}\\033[0m")
+    print(f" 私聊列表: \\033[1;33m[{find_list('private_list')}]\\033[0m")
+    print(f" 封禁QQ : \\033[1;33m[{find_list('ban_user_id')}]\\033[0m")
 except Exception as e:
     print(f"读取配置出错: {e}")
 EOF
         draw_line
-        echo -e "${GREEN}a.${NC} 添加群号到列表        ${RED}b.${NC} 从列表移除群号"
-        echo -e "${GREEN}c.${NC} 添加QQ到私聊列表      ${RED}d.${NC} 从私聊列表移除QQ"
-        echo -e "${YELLOW}t.${NC} 切换名单类型 (白名单/黑名单)"
+        echo -e "${GREEN}1.${NC} 切换群聊名单类型 (白名单/黑名单)"
+        echo -e "${GREEN}2.${NC} 添加群号到 群聊列表"
+        echo -e "${GREEN}3.${NC} 从 群聊列表 移除群号"
+        echo -e "${GREEN}4.${NC} 切换私聊名单类型 (白名单/黑名单)"
+        echo -e "${GREEN}5.${NC} 添加QQ到 私聊列表"
+        echo -e "${GREEN}6.${NC} 从 私聊列表 移除QQ"
+        echo -e "${GREEN}7.${NC} 添加QQ到 用户黑名单"
+        echo -e "${GREEN}8.${NC} 从 私聊列表 移除QQ"
         echo -e "${WHITE}0.${NC} 返回"
         echo -e ""
         read -p " 请选择操作: " m_opt
-        if [[ "$m_opt" == "0" ]]; then return; fi
 
-        local py_script=""
+        if [[ "$m_opt" == "0" ]]; then
+            return
+        fi
+
+        local action=""
+        local key=""
         local input_val=""
-        case $m_opt in
-            a|b|c|d)
-                read -p "请输入号码: " input_val
-                if [[ -z "$input_val" ]]; then continue; fi
-                ;;
-        esac
 
-        case $m_opt in
-            a) py_script="key='group_list'; action='add'; val=$input_val" ;;
-            b) py_script="key='group_list'; action='del'; val=$input_val" ;;
-            c) py_script="key='private_list'; action='add'; val=$input_val" ;;
-            d) py_script="key='private_list'; action='del'; val=$input_val" ;;
-            t) 
-                echo -e "1. 修改群聊模式 (group)  2. 修改私聊模式 (private)"
-                read -p "选择: " t_type
-                if [[ "$t_type" == "1" ]]; then py_script="key='group_list_type'; action='toggle'"; 
-                elif [[ "$t_type" == "2" ]]; then py_script="key='private_list_type'; action='toggle'"; 
-                else continue; fi
-                ;;
+        case "$m_opt" in
+            1) action="toggle"; key="group_list_type" ;;
+            2) action="add"; key="group_list" ;;
+            3) action="del"; key="group_list" ;;
+            4) action="toggle"; key="private_list_type" ;;
+            5) action="add"; key="private_list" ;;
+            6) action="del"; key="private_list" ;;
+            7) action="add"; key="ban_user_id" ;;
+            8) action="del"; key="ban_user_id" ;;
             *) continue ;;
         esac
 
-        # --- 写入部分（已修复错误） ---
+        if [[ "$action" == "add" || "$action" == "del" ]]; then
+            read -p "请输入号码: " input_val
+            [[ -z "$input_val" ]] && continue
+            if [[ ! "$input_val" =~ ^[0-9]+$ ]]; then
+                log_warning "号码必须为纯数字"
+                sleep 1
+                continue
+            fi
+        fi
+
         python3 - <<EOF
 import re
 import sys
+
 file_path = "$config_file"
-$py_script
+action = "$action"
+key = "$key"
+val = "$input_val"
+
 try:
-    with open(file_path, 'r', encoding='utf-8') as f: content = f.read()
-    if action == 'toggle':
-        pattern = r'(' + key + r'\s*=\s*")(\w+)(")'
-        def switch(match):
-            curr = match.group(2)
-            new_val = 'blacklist' if curr == 'whitelist' else 'whitelist'
-            print(f"模式已切换: {curr} -> {new_val}")
-            return f"{match.group(1)}{new_val}{match.group(3)}"
-        new_content = re.sub(pattern, switch, content, count=1)
-    else:
-        # --- 修复点：删除了末尾多余的 parameters 和右括号 ---
-        pattern = r'(' + key + r'\s*=\s*\[)(.*?)(\])'
-        match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
-        if match:
-            nums = re.findall(r'\d+', match.group(2))
-            target = str(val)
-            if action == 'add':
-                if target in nums: print(f"号码 {target} 已存在。")
-                else: nums.append(target); print(f"已添加 {target}")
-            elif action == 'del':
-                if target in nums: nums = [n for n in nums if n != target]; print(f"已移除 {target}")
-                else: print(f"号码 {target} 不在列表中。")
-            new_list_str = ", ".join(nums) # 加个空格美观一点
-            new_content = content.replace(match.group(0), f"{match.group(1)}{new_list_str}{match.group(3)}")
-        else: 
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    if action == "toggle":
+        pattern = r'(^\\s*' + re.escape(key) + r'\\s*=\\s*")(\\w+)(".*)$'
+        m = re.search(pattern, content, re.MULTILINE)
+        if not m:
             print("未找到配置项，操作中止")
             sys.exit(0)
-    with open(file_path, 'w', encoding='utf-8') as f: f.write(new_content)
-except Exception as e: print(f"修改失败: {e}")
+        old = m.group(2)
+        new = "blacklist" if old == "whitelist" else "whitelist"
+        new_line = f'{m.group(1)}{new}{m.group(3)}'
+        content = re.sub(pattern, new_line, content, count=1, flags=re.MULTILINE)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"已切换 {key}: {old} -> {new}")
+    else:
+        pattern = r'(^\\s*' + re.escape(key) + r'\\s*=\\s*\\[)(.*?)(\\]\\s*(#.*)?$)'
+        m = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+        if not m:
+            print("未找到配置项，操作中止")
+            sys.exit(0)
+
+        nums = re.findall(r'\\d+', m.group(2))
+        target = str(val)
+
+        if action == "add":
+            if target in nums:
+                print(f"号码 {target} 已存在")
+            else:
+                nums.append(target)
+                print(f"已添加 {target}")
+        elif action == "del":
+            if target in nums:
+                nums = [n for n in nums if n != target]
+                print(f"已移除 {target}")
+            else:
+                print(f"号码 {target} 不在列表中")
+
+        new_list = ", ".join(nums)
+        new_block = f"{m.group(1)}{new_list}{m.group(3)}"
+        content = content.replace(m.group(0), new_block, 1)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+except Exception as e:
+    print(f"修改失败: {e}")
 EOF
         read -p "按回车继续..."
     done
