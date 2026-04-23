@@ -40,8 +40,9 @@ USER_PYTHON_ENV=""     # system / uv
 USER_VENV_MODE=""      # keep / recreate
 USER_GH_PROXY=""
 USER_PIP_DISPLAY=""    # UI显示用
-USER_PIP_INDEX=""      # 实际配置
-USER_PIP_HOST=""       # 实际配置
+USER_PIP_INDEX=""      # pip 实际配置
+USER_PIP_HOST=""       # pip 实际配置
+USER_UV_INDEX=""       # uv 实际配置
 USER_NAPCAT_MODE="" 
 
 # =========================================================
@@ -499,16 +500,7 @@ configure_github() {
 configure_pip() {
     draw_header
     echo -e "${BLUE}▶ 6/6 Python 依赖源配置${NC}"
-
-    if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
-        USER_PIP_DISPLAY="uv sync"
-        USER_PIP_INDEX=""
-        USER_PIP_HOST=""
-        echo -e "${CYAN}当前为 uv 模式，将使用 uv sync 同步依赖。${NC}"
-        echo -e "${GREY}该模式下不使用 pip 镜像配置。${NC}"
-        read -p "按回车继续..."
-        return
-    fi
+    echo -e "${GREY}该配置会同时用于 pip 与 uv。${NC}"
 
     echo -e "${GREEN}1.${NC} 保持现状/系统默认"
     echo -e "${GREEN}2.${NC} 阿里云"
@@ -516,10 +508,30 @@ configure_pip() {
     echo -e "${GREEN}4.${NC} 官方源"
     read -p "选择 [1-4] (默认1): " pip_choice
     case ${pip_choice:-1} in
-        2) USER_PIP_DISPLAY="阿里云"; USER_PIP_INDEX="https://mirrors.aliyun.com/pypi/simple/"; USER_PIP_HOST="mirrors.aliyun.com" ;;
-        3) USER_PIP_DISPLAY="清华大学"; USER_PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"; USER_PIP_HOST="pypi.tuna.tsinghua.edu.cn" ;;
-        4) USER_PIP_DISPLAY="官方源"; USER_PIP_INDEX="https://pypi.org/simple"; USER_PIP_HOST="pypi.org" ;;
-        *) USER_PIP_DISPLAY="系统默认"; USER_PIP_INDEX=""; USER_PIP_HOST="" ;;
+        2)
+            USER_PIP_DISPLAY="阿里云"
+            USER_PIP_INDEX="https://mirrors.aliyun.com/pypi/simple/"
+            USER_PIP_HOST="mirrors.aliyun.com"
+            USER_UV_INDEX="$USER_PIP_INDEX"
+            ;;
+        3)
+            USER_PIP_DISPLAY="清华大学"
+            USER_PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
+            USER_PIP_HOST="pypi.tuna.tsinghua.edu.cn"
+            USER_UV_INDEX="$USER_PIP_INDEX"
+            ;;
+        4)
+            USER_PIP_DISPLAY="官方源"
+            USER_PIP_INDEX="https://pypi.org/simple"
+            USER_PIP_HOST="pypi.org"
+            USER_UV_INDEX="$USER_PIP_INDEX"
+            ;;
+        *)
+            USER_PIP_DISPLAY="系统默认"
+            USER_PIP_INDEX=""
+            USER_PIP_HOST=""
+            USER_UV_INDEX=""
+            ;;
     esac
 }
 
@@ -600,6 +612,12 @@ run_install() {
     if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
         ensure_uv_installed || return
         cd "$USER_INSTALL_PATH/MaiBot" || exit 1
+
+        if [[ -n "$USER_UV_INDEX" ]]; then
+            export UV_INDEX_URL="$USER_UV_INDEX"
+            export PIP_INDEX_URL="$USER_UV_INDEX"
+            log_info "已为 uv/pip 设置镜像源: $USER_UV_INDEX"
+        fi
 
         if [[ "$USER_VENV_MODE" == "recreate" && -d ".venv" ]]; then
             log_warning "移除旧 uv 虚拟环境..."
