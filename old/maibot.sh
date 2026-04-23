@@ -1,7 +1,7 @@
 #!/bin/bash
 #License: GNU GENERAL PUBLIC LICENSE Version 3
 #Author: 清蒸云鸭
-#with VibeCoding
+#Edited with Gemini
 #Update: 2026-01-20
 
 # =========================================================
@@ -30,13 +30,12 @@ GITHUB_MIRRORS=(
     "https://github.moeyy.xyz"
 )
 
-# 测速目标文件
+# 更新测速目标文件
 TEST_FILE_PATH="https://raw.githubusercontent.com/Mai-with-u/MaiBot/refs/heads/main/README.md"
 
 # 临时存储用户选择的变量
 USER_INSTALL_PATH=""
 USER_INSTALL_MODE=""   # normal / clean
-USER_PYTHON_ENV=""     # system / uv
 USER_VENV_MODE=""      # keep / recreate
 USER_GH_PROXY=""
 USER_PIP_DISPLAY=""    # UI显示用
@@ -57,11 +56,11 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 draw_header() {
     clear
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.8${NC}               ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.7${NC}               ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
     
-    # 状态栏
+    # 状态栏 (面包屑导航) - 仅在安装流程中且已设置路径时显示
     if [[ "$INSTALLATION_ACTIVE" == "true" && -n "$USER_INSTALL_PATH" ]]; then
         echo -e "${WHITE} 配置预览:${NC}"
         echo -e " ${GREY}●${NC} 目录: ${CYAN}${USER_INSTALL_PATH}${NC}"
@@ -73,15 +72,8 @@ draw_header() {
             echo -e " ${GREY}●${NC} 模式: ${mode_str}"
         fi
 
-        # Python 运行环境
-        if [[ -n "$USER_PYTHON_ENV" ]]; then
-            local py_env_str="本机 python3"
-            [[ "$USER_PYTHON_ENV" == "uv" ]] && py_env_str="${CYAN}uv (Python 3.14)${NC}"
-            echo -e " ${GREY}●${NC} Python: ${py_env_str}"
-        fi
-
-        # 虚拟环境（仅本机 python3 模式）
-        if [[ "$USER_PYTHON_ENV" != "uv" && -n "$USER_VENV_MODE" && "$USER_INSTALL_MODE" != "clean" ]]; then
+        # 虚拟环境
+        if [[ -n "$USER_VENV_MODE" && "$USER_INSTALL_MODE" != "clean" ]]; then
             local venv_str="保留旧环境"
             [[ "$USER_VENV_MODE" == "recreate" ]] && venv_str="${YELLOW}强制重建环境${NC}"
             echo -e " ${GREY}●${NC} 环境: ${venv_str}"
@@ -124,61 +116,14 @@ draw_line() {
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         source "$CONFIG_FILE"
-        if [[ -z "$MAI_PYTHON_ENV" ]]; then
-            MAI_PYTHON_ENV="system"
-        fi
-
-        # 兼容旧配置: MAI_PATH <-> USER_INSTALL_PATH
-        if [[ -z "$USER_INSTALL_PATH" && -n "$MAI_PATH" ]]; then
-            USER_INSTALL_PATH="$MAI_PATH"
-        fi
-        if [[ -z "$MAI_PATH" && -n "$USER_INSTALL_PATH" ]]; then
-            MAI_PATH="$USER_INSTALL_PATH"
-        fi
-
-        if [[ -n "$USER_INSTALL_PATH" || -n "$MAI_PATH" ]]; then return 0; fi
+        if [[ -n "$MAI_PATH" ]]; then return 0; fi
     fi
     return 1
 }
 
 save_config() {
     local path="$1"
-    local python_env="$2"
-    if [[ -z "$python_env" ]]; then
-        python_env="${USER_PYTHON_ENV:-${MAI_PYTHON_ENV:-system}}"
-    fi
-    {
-        echo "USER_INSTALL_PATH=\"$path\""
-        echo "MAI_PATH=\"$path\""
-        echo "MAI_PYTHON_ENV=\"$python_env\""
-    } > "$CONFIG_FILE"
-}
-
-ensure_uv_installed() {
-    if command -v uv &> /dev/null; then
-        return 0
-    fi
-
-    log_warning "未检测到 uv，开始自动安装..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    if [[ $? -ne 0 ]]; then
-        log_error "uv 安装失败。"
-        return 1
-    fi
-
-    # 刷新环境变量，确保当前 shell 可立即使用 uv
-    if [[ -f "$HOME/.local/bin/env" ]]; then
-        source "$HOME/.local/bin/env"
-    fi
-    hash -r
-
-    if ! command -v uv &> /dev/null; then
-        log_error "uv 已安装但当前会话仍不可用，请重新登录 shell 后重试。"
-        return 1
-    fi
-
-    log_success "uv 安装并加载完成。"
-    return 0
+    echo "MAI_PATH=\"$path\"" > "$CONFIG_FILE"
 }
 
 check_screen_installed() {
@@ -186,69 +131,41 @@ check_screen_installed() {
     return 0
 }
 
-# Git Clone
+# 增强版 Git Clone
 git_clone_safe() {
     local url="$1"
     local dir="$2"
-    local branch="$3"
-    local install_path="${USER_INSTALL_PATH:-$MAI_PATH}"
-
-    if [[ -z "$install_path" ]]; then
-        load_config >/dev/null 2>&1
-        install_path="${USER_INSTALL_PATH:-$MAI_PATH}"
-    fi
-
-    if [[ -z "$install_path" ]]; then
-        log_error "未找到安装目录(USER_INSTALL_PATH/MAI_PATH)"
-        return 1
-    fi
-
-    local target_dir="$dir"
-    if [[ "$target_dir" != /* ]]; then
-        target_dir="$install_path/$dir"
-    fi
     
     # 目录存在处理逻辑
-    if [[ -d "$target_dir" ]]; then
+    if [[ -d "$dir" ]]; then
         if [[ "$USER_INSTALL_MODE" == "clean" ]]; then
-            log_warning "清理旧目录: $target_dir"
-            rm -rf "$target_dir"
+            log_warning "清理旧目录: $dir"
+            rm -rf "$dir"
         else
-            log_info "检测到目录 ${CYAN}$target_dir${NC} 已存在，尝试更新..."
-            cd "$target_dir" || return 1
-            if [[ -n "$branch" ]]; then
-                git fetch origin "$branch"
-                git checkout "$branch"
-                git pull origin "$branch"
-            else
-                git pull
-            fi
+            log_info "检测到目录 ${CYAN}$dir${NC} 已存在，尝试更新..."
+            cd "$dir" || return 1
+            git pull
             if [ $? -eq 0 ]; then
-                cd "$install_path" || return 1
-                return 0
+                cd ..; return 0
             else
                 log_error "更新失败。"
-                cd "$install_path" || return 1
+                cd ..
                 echo -e "${YELLOW}是否删除旧文件夹并重新克隆？${NC}"
                 read -p "请输入 (y/n): " re_choice
-                if [[ "$re_choice" == "y" ]]; then rm -rf "$target_dir"; else return 1; fi
+                if [[ "$re_choice" == "y" ]]; then rm -rf "$dir"; else return 1; fi
             fi
         fi
     fi
 
     log_info "正在克隆 ${CYAN}$dir${NC} (显示进度)..."
-    if [[ -n "$branch" ]]; then
-        git clone --depth 1 --progress -b "$branch" "$url" "$target_dir"
-    else
-        git clone --depth 1 --progress "$url" "$target_dir"
-    fi
+    git clone --depth 1 --progress "$url" "$dir"
     
     if [ $? -eq 0 ]; then
         log_success "$dir 克隆成功"
         return 0
     else
         log_error "克隆失败！请检查网络或更换加速源。"
-        rm -rf "$target_dir"
+        rm -rf "$dir"
         echo -e "1. 重试  2. 跳过  3. 退出"
         read -p "请选择: " retry_choice
         case $retry_choice in
@@ -259,7 +176,7 @@ git_clone_safe() {
     fi
 }
 
-# Docker Compose Up
+# 增强版 Docker Compose Up
 docker_compose_safe() {
     local work_dir="$1"
     cd "$work_dir" || return 1
@@ -326,7 +243,7 @@ configure_docker_mirror() {
 
 configure_install_path() {
     draw_header
-    echo -e "${BLUE}▶ 1/6 安装目录配置${NC}"
+    echo -e "${BLUE}▶ 1/5 安装目录配置${NC}"
     local default_path="$HOME/maimai"
     load_config
     if [[ -n "$MAI_PATH" ]]; then default_path="$MAI_PATH"; fi
@@ -347,7 +264,7 @@ configure_install_path() {
 
 step_install_mode() {
     draw_header
-    echo -e "${BLUE}▶ 2/6 选择安装模式${NC}"
+    echo -e "${BLUE}▶ 2/5 选择安装模式${NC}"
     if [[ ! -d "$USER_INSTALL_PATH/MaiBot" ]]; then
         USER_INSTALL_MODE="normal"; USER_VENV_MODE="recreate"; return
     fi
@@ -364,54 +281,19 @@ step_install_mode() {
     esac
 }
 
-step_python_env_mode() {
-    draw_header
-    echo -e "${BLUE}▶ 3/6 Python 环境方式${NC}"
-    local default_choice="2"
-
-    if [[ -z "$USER_PYTHON_ENV" ]]; then
-        if load_config && [[ "$MAI_PYTHON_ENV" == "uv" ]]; then
-            USER_PYTHON_ENV="uv"
-        else
-            USER_PYTHON_ENV="system"
-        fi
-    fi
-
-    [[ "$USER_PYTHON_ENV" == "uv" ]] && default_choice="2"
-
-    echo -e "${GREEN}1.${NC} 本机 python3 环境"
-    echo -e "${GREEN}2.${NC} uv 环境 ${WHITE}(Python 3.14)${NC}"
-    read -p "请选择 [1-2] (默认${default_choice}): " py_choice
-    case ${py_choice:-$default_choice} in
-        2) USER_PYTHON_ENV="uv" ;;
-        *) USER_PYTHON_ENV="system" ;;
-    esac
-}
-
 step_venv_mode() {
-    if [[ "$USER_INSTALL_MODE" == "clean" ]]; then
-        USER_VENV_MODE="recreate"
-        return
-    fi
-
+    if [[ "$USER_INSTALL_MODE" == "clean" ]]; then return; fi
     draw_header
-    if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
-        echo -e "${BLUE}▶ 4/6 uv 虚拟环境处理${NC}"
-        echo -e "${GREEN}1.${NC} 保留现有 .venv ${WHITE}(速度快，适合小更新)${NC}"
-        echo -e "${YELLOW}2.${NC} 删除并重建 .venv ${WHITE}(推荐，彻底解决依赖冲突)${NC}"
-    else
-        echo -e "${BLUE}▶ 4/6 Python 虚拟环境处理${NC}"
-        echo -e "${GREEN}1.${NC} 保留现有环境 ${WHITE}(速度快，适合小更新)${NC}"
-        echo -e "${YELLOW}2.${NC} 删除并重建环境 ${WHITE}(推荐，彻底解决依赖冲突)${NC}"
-    fi
-
+    echo -e "${BLUE}▶ 3/5 Python 环境处理${NC}"
+    echo -e "${GREEN}1.${NC} 保留现有环境 ${WHITE}(速度快，适合小更新)${NC}"
+    echo -e "${YELLOW}2.${NC} 删除并重建环境 ${WHITE}(推荐，彻底解决依赖冲突)${NC}"
     read -p "请选择 [1-2] (默认1): " venv_choice
     case ${venv_choice:-1} in 2) USER_VENV_MODE="recreate" ;; *) USER_VENV_MODE="keep" ;; esac
 }
 
 configure_github() {
     draw_header
-    echo -e "${BLUE}▶ 5/6 GitHub 线路配置${NC}"
+    echo -e "${BLUE}▶ 4/5 GitHub 线路配置${NC}"
     
     run_speedtest() {
         echo -e "${YELLOW}正在并行测速，请稍候...${NC}"
@@ -459,7 +341,7 @@ configure_github() {
                 if [[ "$ms" == "9999" ]]; then
                     echo -e " ${RED}超时/失败${NC}| $url"
                 else
-                    # 设置最佳镜像
+                    # 设置最佳镜像 (取第一个非超时的)
                     if [[ -z "$best_mirror" ]]; then
                         best_mirror=$url
                         best_ms=$ms
@@ -498,18 +380,7 @@ configure_github() {
 
 configure_pip() {
     draw_header
-    echo -e "${BLUE}▶ 6/6 Python 依赖源配置${NC}"
-
-    if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
-        USER_PIP_DISPLAY="uv sync"
-        USER_PIP_INDEX=""
-        USER_PIP_HOST=""
-        echo -e "${CYAN}当前为 uv 模式，将使用 uv sync 同步依赖。${NC}"
-        echo -e "${GREY}该模式下不使用 pip 镜像配置。${NC}"
-        read -p "按回车继续..."
-        return
-    fi
-
+    echo -e "${BLUE}▶ 5/5 Pip 镜像源配置${NC}"
     echo -e "${GREEN}1.${NC} 保持现状/系统默认"
     echo -e "${GREEN}2.${NC} 阿里云"
     echo -e "${GREEN}3.${NC} 清华大学"
@@ -533,17 +404,6 @@ configure_napcat_selection() {
     USER_NAPCAT_MODE=${nc_choice:-1}
 }
 
-prepare_napcat_docker() {
-    if [[ "$USER_NAPCAT_MODE" != "1" ]]; then return; fi
-    draw_header
-    echo -e "${BLUE}▶ Docker 环境准备${NC}"
-    if ! command -v docker &> /dev/null; then
-        log_warning "未检测到 Docker，准备安装..."
-        install_docker_safe
-    fi
-    configure_docker_mirror
-}
-
 # =========================================================
 # 4. 执行安装模块
 # =========================================================
@@ -560,17 +420,9 @@ run_install() {
     echo -e "\n${BLUE}▶ 开始安装系统依赖...${NC}"
     if command -v apt &> /dev/null; then
         sudo DEBIAN_FRONTEND=noninteractive apt update -y -qq
-        if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
-            sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq build-essential git wget curl screen jq
-        else
-            sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq python3-dev python3-venv python3-pip build-essential git wget curl screen jq
-        fi
+        sudo DEBIAN_FRONTEND=noninteractive apt install -y -qq python3-dev python3-venv python3-pip build-essential git wget curl screen jq
     elif command -v yum &> /dev/null; then
-        if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
-            sudo yum install -y git wget curl screen jq
-        else
-            sudo yum install -y python3-devel git wget curl screen jq
-        fi
+         sudo yum install -y python3-devel git wget curl screen jq
     fi
 
     # 目录清理
@@ -589,55 +441,50 @@ run_install() {
     }
 
     echo -e "\n${BLUE}▶ 下载/更新组件...${NC}"
-    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot')" "MaiBot" "main"
-    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot-Napcat-Adapter')" "MaiBot/plugins/MaiBot-Napcat-Adapter" "plugin"
+    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot')" "MaiBot"
+    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot-Napcat-Adapter')" "MaiBot-Napcat-Adapter"
     
     echo -e "\n${BLUE}▶ 初始化配置文件...${NC}"
+    copy_conf() {
+        if [[ ! -f "$2" ]] && [[ -f "$1" ]]; then
+            mkdir -p "$(dirname "$2")"
+            cp "$1" "$2"
+            echo " - 生成配置: $2"
+            return 0
+        fi
+        return 1
+    }
     
-   
+    copy_conf "MaiBot/template/bot_config_template.toml" "MaiBot/config/bot_config.toml"
+    copy_conf "MaiBot/template/model_config_template.toml" "MaiBot/config/model_config.toml"
+    if copy_conf "MaiBot/template/template.env" "MaiBot/.env"; then
+        sed -i 's/WEBUI_HOST=127.0.0.1/WEBUI_HOST=0.0.0.0/g' "MaiBot/.env"
+    fi
+    copy_conf "MaiBot-Napcat-Adapter/template/template_config.toml" "MaiBot-Napcat-Adapter/config.toml"
 
     echo -e "\n${BLUE}▶ 配置 Python 环境...${NC}"
-    if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
-        ensure_uv_installed || return
-        cd "$USER_INSTALL_PATH/MaiBot" || exit 1
-
-        if [[ "$USER_VENV_MODE" == "recreate" && -d ".venv" ]]; then
-            log_warning "移除旧 uv 虚拟环境..."
-            rm -rf .venv
-        fi
-
-        if [[ ! -d ".venv" ]]; then
-            echo " - 使用 uv 创建虚拟环境 (.venv, Python 3.14)..."
-            uv venv --python 3.14
-        fi
-
-        echo " - 使用 uv sync 同步依赖..."
-        uv sync
-        cd "$USER_INSTALL_PATH" || exit 1
-    else
-        if [[ "$USER_VENV_MODE" == "recreate" && -d "venv" ]]; then
-            log_warning "移除旧虚拟环境..."
-            rm -rf venv
-        fi
-        if [[ ! -d "venv" ]]; then
-            echo " - 创建虚拟环境 venv..."
-            python3 -m venv venv
-        fi
-        source venv/bin/activate
-
-        if [[ -n "$USER_PIP_INDEX" ]]; then
-            mkdir -p ~/.pip
-            echo -e "[global]\nindex-url = $USER_PIP_INDEX\ntrusted-host = $USER_PIP_HOST" > ~/.pip/pip.conf
-        fi
-
-        echo " - 更新 pip..."
-        pip install --upgrade pip
-
-        if [[ -f "MaiBot/requirements.txt" ]]; then pip install -r MaiBot/requirements.txt; fi
-        if [[ -f "MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt" ]]; then pip install -r MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt; fi
+    if [[ "$USER_VENV_MODE" == "recreate" && -d "venv" ]]; then
+        log_warning "移除旧虚拟环境..."
+        rm -rf venv
     fi
+    if [[ ! -d "venv" ]]; then 
+        echo " - 创建虚拟环境 venv..."
+        python3 -m venv venv
+    fi
+    source venv/bin/activate
+    
+    if [[ -n "$USER_PIP_INDEX" ]]; then
+        mkdir -p ~/.pip
+        echo -e "[global]\nindex-url = $USER_PIP_INDEX\ntrusted-host = $USER_PIP_HOST" > ~/.pip/pip.conf
+    fi
+    
+    echo " - 更新 pip..."
+    pip install --upgrade pip
+    
+    if [[ -f "MaiBot/requirements.txt" ]]; then pip install -r MaiBot/requirements.txt; fi
+    if [[ -f "MaiBot-Napcat-Adapter/requirements.txt" ]]; then pip install -r MaiBot-Napcat-Adapter/requirements.txt; fi
 
-    save_config "$USER_INSTALL_PATH" "$USER_PYTHON_ENV"
+    save_config "$USER_INSTALL_PATH"
     log_success "MaiBot 本体部署完成！"
     execute_napcat_install
     
@@ -654,6 +501,11 @@ execute_napcat_install() {
 
     case $USER_NAPCAT_MODE in
         1)
+            if ! command -v docker &> /dev/null; then
+                log_warning "未检测到 Docker，准备安装..."
+                install_docker_safe
+            fi
+            configure_docker_mirror
             mkdir -p "$NAPCAT_DIR"
             log_info "生成 docker-compose.yml..."
             # 移除 WEBUI_TOKEN，修改 UID/GID
@@ -688,7 +540,7 @@ EOF
 }
 
 # =========================================================
-# 5. 配置与访问菜单
+# 5. 配置与访问菜单 (合并修改版)
 # =========================================================
 
 get_ip() {
@@ -700,7 +552,7 @@ get_ip() {
 manage_config_access_menu() {
     if ! load_config; then log_error "未找到配置"; return; fi
     local MAIBOT_DIR="$MAI_PATH/MaiBot"
-    local ADAPTER_DIR="$MAI_PATH/MaiBot/plugins/MaiBot-Napcat-Adapter"
+    local ADAPTER_DIR="$MAI_PATH/MaiBot-Napcat-Adapter"
     local NAPCAT_DIR="$MAI_PATH/NapCat"
     local PUBLIC_IP=$(get_ip)
 
@@ -709,9 +561,9 @@ manage_config_access_menu() {
         echo -e "${BLUE}▶ 配置与访问${NC}"
         echo -e " 公网IP: ${CYAN}${PUBLIC_IP}${NC}"
         draw_line
+        # 合并后的选项1
         echo -e "${GREEN}1.${NC} 查看 WebUI 访问信息 (MaiBot & NapCat)"
-        echo -e "${GREEN}2.${NC} 初始化MaiBot访问配置"
-        echo -e "${GREEN}3.${NC} 修改 Adapter 配置 (黑白名单管理)"
+        echo -e "${GREEN}2.${NC} 修改 Adapter 配置 (黑白名单管理)"
         draw_line
         echo -e "${WHITE}0.${NC} 返回上一级"
         echo -e ""
@@ -724,66 +576,20 @@ manage_config_access_menu() {
                 
                 # --- Part A: MaiBot ---
                 echo -e "\n${PURPLE}● MaiBot WebUI${NC}"
-                local bot_cfg="$MAIBOT_DIR/config/bot_config.toml"
-                local webui_json="$MAIBOT_DIR/data/webui.json"
-                if [[ -f "$bot_cfg" ]]; then
-                    local webui_host=""
-                    local port=""
+                if [[ -f "$MAIBOT_DIR/.env" ]] && [[ -f "$MAIBOT_DIR/data/webui.json" ]]; then
+                    local port=$(grep "WEBUI_PORT" "$MAIBOT_DIR/.env" | cut -d'=' -f2 | tr -d ' "')
                     local token=""
-
-                    webui_host=$(awk '
-                        /^\[webui\]/ {in_webui=1; next}
-                        /^\[/ {if (in_webui) exit; in_webui=0}
-                        in_webui && $0 ~ /^[[:space:]]*host[[:space:]]*=/ {
-                            line=$0
-                            sub(/^[^=]*=[[:space:]]*/, "", line)
-                            sub(/[[:space:]]*#.*/, "", line)
-                            gsub(/["[:space:]]/, "", line)
-                            print line
-                            exit
-                        }
-                    ' "$bot_cfg")
-
-                    port=$(awk '
-                        /^\[webui\]/ {in_webui=1; next}
-                        /^\[/ {if (in_webui) exit; in_webui=0}
-                        in_webui && $0 ~ /^[[:space:]]*port[[:space:]]*=/ {
-                            line=$0
-                            sub(/^[^=]*=[[:space:]]*/, "", line)
-                            sub(/[[:space:]]*#.*/, "", line)
-                            gsub(/["[:space:]]/, "", line)
-                            print line
-                            exit
-                        }
-                    ' "$bot_cfg")
-
-                    [[ -z "$webui_host" ]] && webui_host="0.0.0.0"
-                    [[ -z "$port" ]] && port="8001"
-
-                    if [[ -f "$webui_json" ]]; then
-                        if command -v jq &>/dev/null; then
-                            token=$(jq -r '.access_token' "$webui_json")
-                        else
-                            token=$(python3 -c "import json; print(json.load(open('$webui_json'))['access_token'])" 2>/dev/null)
-                        fi
+                    if command -v jq &>/dev/null; then
+                        token=$(jq -r '.access_token' "$MAIBOT_DIR/data/webui.json")
                     else
-                        token="(未生成，请先启动 MaiBot 本体)"
+                         token=$(python3 -c "import json; print(json.load(open('$MAIBOT_DIR/data/webui.json'))['access_token'])" 2>/dev/null)
                     fi
-
-                    local display_host="$PUBLIC_IP"
-                    if [[ "$webui_host" == "127.0.0.1" || "$webui_host" == "localhost" ]]; then
-                        display_host="$webui_host"
-                    fi
-
-                    echo -e "  访问地址: ${CYAN}http://${display_host}:${port}${NC}"
+                    
+                    if [[ -z "$port" ]]; then port="8001 (默认)"; fi
+                    echo -e "  访问地址: ${CYAN}http://${PUBLIC_IP}:${port}${NC}"
                     echo -e "  访问密钥: ${YELLOW}${token}${NC}"
-
-                    if [[ "$webui_host" == "127.0.0.1" || "$webui_host" == "localhost" ]]; then
-                        echo -e "  ${YELLOW}当前 WebUI host=$webui_host，仅本机可访问，无法远程访问。${NC}"
-                        echo -e "  ${YELLOW}请修改 $bot_cfg 中 [webui] 的 host 为 0.0.0.0 后重启 MaiBot。${NC}"
-                    fi
                 else
-                    echo -e "  ${YELLOW}未找到 MaiBot 配置文件: $bot_cfg${NC}"
+                    echo -e "  ${YELLOW}未找到 MaiBot 配置文件 (可能未启动过本体)${NC}"
                 fi
                 
                 draw_line 
@@ -812,298 +618,109 @@ manage_config_access_menu() {
                 read -p "按回车返回..."
                 ;;
             2)
-                initialize_maibot_access_config
-                ;;
-            3)
-                modify_adapter_config
+                modify_adapter_config "$ADAPTER_DIR/config.toml"
                 ;;
             0) return ;;
         esac
     done
 }
 
-initialize_maibot_access_config() {
-    if ! load_config; then
-        log_error "未找到配置"
-        sleep 2
-        return
-    fi
-
-    local bot_cfg="$MAI_PATH/MaiBot/config/bot_config.toml"
-    local adapter_dir="$MAI_PATH/MaiBot/plugins/MaiBot-Napcat-Adapter"
-    local adapter_cfg="$adapter_dir/config.toml"
-
-    draw_header
-    echo -e "${BLUE}▶ 初始化MaiBot访问配置${NC}"
-    draw_line
-
-    # a. 修改 MaiBot WebUI host
-    if [[ ! -f "$bot_cfg" ]]; then
-        echo -e "${YELLOW}MaiBot暂未完成初始化，请启动一次MaiBot并同意用户许可协议(EULA)${NC}"
-    else
-        python3 - <<EOF
-import re
-path = "$bot_cfg"
-with open(path, "r", encoding="utf-8") as f:
-    lines = f.readlines()
-
-webui_start = None
-webui_end = len(lines)
-for i, line in enumerate(lines):
-    if re.match(r'^\s*\[webui\]\s*$', line):
-        webui_start = i
-        break
-
-if webui_start is None:
-    print("未找到 [webui] 段，已跳过 MaiBot WebUI host 初始化。")
-else:
-    for j in range(webui_start + 1, len(lines)):
-        if re.match(r'^\s*\[.+\]\s*$', lines[j]):
-            webui_end = j
-            break
-
-    host_found = False
-    changed = False
-    for k in range(webui_start + 1, webui_end):
-        m = re.match(r'^(\s*host\s*=\s*)([^#\n]*)(\s*(#.*)?)$', lines[k])
-        if m:
-            host_found = True
-            current = m.group(2).strip().strip('"').strip("'")
-            if current != "0.0.0.0":
-                lines[k] = f'{m.group(1)}"0.0.0.0"{m.group(3)}\n'
-                changed = True
-            break
-
-    if not host_found:
-        lines.insert(webui_start + 1, 'host = "0.0.0.0"\n')
-        changed = True
-
-    if changed:
-        with open(path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-        print("已完成 MaiBot WebUI host 初始化: 0.0.0.0")
-    else:
-        print("MaiBot WebUI host 已是 0.0.0.0，无需修改")
-EOF
-    fi
-
-    draw_line
-
-    # b. 修改 Adapter 配置
-    if [[ ! -d "$adapter_dir" ]]; then
-        echo -e "${YELLOW}未找到MaiBot-Napcat-Adapter插件，请重新执行一次安装程序以安装${NC}"
-    elif [[ ! -f "$adapter_cfg" ]]; then
-        echo -e "${YELLOW}MaiBot-Napcat-Adapter插件暂未完成初始化，请启动一次MaiBot并同意用户许可协议(EULA)${NC}"
-    else
-        python3 - <<EOF
-import re
-path = "$adapter_cfg"
-with open(path, "r", encoding="utf-8") as f:
-    lines = f.readlines()
-
-def find_section(name):
-    start = None
-    end = len(lines)
-    for i, line in enumerate(lines):
-        if re.match(r'^\s*\[' + re.escape(name) + r'\]\s*$', line):
-            start = i
-            break
-    if start is None:
-        return None, None
-    for j in range(start + 1, len(lines)):
-        if re.match(r'^\s*\[.+\]\s*$', lines[j]):
-            end = j
-            break
-    return start, end
-
-def set_key(section, key, value_text):
-    s, e = find_section(section)
-    if s is None:
-        return False, False
-    found = False
-    changed = False
-    for i in range(s + 1, e):
-        m = re.match(r'^(\s*' + re.escape(key) + r'\s*=\s*)([^#\n]*)(\s*(#.*)?)$', lines[i])
-        if m:
-            found = True
-            old = m.group(2).strip()
-            if old != value_text:
-                lines[i] = f'{m.group(1)}{value_text}{m.group(3)}\n'
-                changed = True
-            break
-    if not found:
-        lines.insert(s + 1, f'{key} = {value_text}\n')
-        changed = True
-    return True, changed
-
-ok1, ch1 = set_key("plugin", "enabled", "true")
-
-if not ok1:
-    print("未找到 [plugin] 段，已跳过 enabled 初始化。")
-
-if ch1:
-    with open(path, "w", encoding="utf-8") as f:
-        f.writelines(lines)
-    print("已完成 Adapter 访问配置初始化（enabled=true）")
-else:
-    print("Adapter enabled 已是 true，无需修改")
-EOF
-    fi
-
-    draw_line
-    echo -e "${YELLOW}以上所有修改完成后，请手动前往主菜单 [2. 管理 MaiBot 核心] 重新启动一次MaiBot。${NC}"
-    read -p "按回车返回..."
-}
-
 modify_adapter_config() {
-    if ! load_config; then
-        log_error "未找到配置"
-        sleep 2
-        return
-    fi
-
-    local adapter_dir="$MAI_PATH/MaiBot/plugins/MaiBot-Napcat-Adapter"
-    local config_file="$adapter_dir/config.toml"
-
-    if [[ ! -d "$adapter_dir" ]]; then
-        log_error "未找到MaiBot-Napcat-Adapter插件，请重新执行一次安装程序以安装"
-        sleep 2
-        return
-    fi
-    if [[ ! -f "$config_file" ]]; then
-        log_error "MaiBot-Napcat-Adapter插件暂未完成初始化，请启动一次MaiBot并同意用户许可协议(EULA)"
-        sleep 2
-        return
-    fi
+    local config_file="$1"
+    if [[ ! -f "$config_file" ]]; then log_error "找不到配置文件: $config_file"; sleep 2; return; fi
 
     while true; do
         draw_header
-        echo -e "${BLUE}▶ Adapter 黑白名单管理${NC}"
+        echo -e "${BLUE}▶ Adapter 名单管理${NC}"
+        # --- 读取部分保持不变 ---
         python3 - <<EOF
 import re
 try:
-    with open("$config_file", "r", encoding="utf-8") as f:
+    with open("$config_file", 'r', encoding='utf-8') as f:
         content = f.read()
-
-    def find_val(key):
-        m = re.search(r'^\\s*' + re.escape(key) + r'\\s*=\\s*"(.*?)"', content, re.MULTILINE)
-        return m.group(1) if m else "Unknown"
-
     def find_list(key):
-        m = re.search(r'^\\s*' + re.escape(key) + r'\\s*=\\s*\\[(.*?)\\]', content, re.MULTILINE | re.DOTALL)
-        if not m:
-            return "Not Found"
-        return m.group(1).replace("\\n", "").strip()
+        match = re.search(r'^\s*' + key + r'\s*=\s*\[(.*?)\]', content, re.MULTILINE | re.DOTALL)
+        return match.group(1).replace('\n', '').strip() if match else "Not Found"
+    def find_val(key):
+        match = re.search(r'^\s*' + key + r'\s*=\s*"(.*?)"', content, re.MULTILINE)
+        return match.group(1) if match else "Unknown"
 
-    print(f" 群聊模式: \\033[1;36m{find_val('group_list_type')}\\033[0m")
-    print(f" 群聊列表: \\033[1;33m[{find_list('group_list')}]\\033[0m")
-    print(f" 私聊模式: \\033[1;36m{find_val('private_list_type')}\\033[0m")
-    print(f" 私聊列表: \\033[1;33m[{find_list('private_list')}]\\033[0m")
-    print(f" 封禁QQ : \\033[1;33m[{find_list('ban_user_id')}]\\033[0m")
+    print(f" 1. 群聊模式: \033[1;36m{find_val('group_list_type')}\033[0m")
+    print(f"    群聊列表: \033[1;33m[{find_list('group_list')}]\033[0m")
+    print(f" 2. 私聊模式: \033[1;36m{find_val('private_list_type')}\033[0m")
+    print(f"    私聊列表: \033[1;33m[{find_list('private_list')}]\033[0m")
 except Exception as e:
     print(f"读取配置出错: {e}")
 EOF
         draw_line
-        echo -e "${GREEN}1.${NC} 切换群聊名单类型 (白名单/黑名单)"
-        echo -e "${GREEN}2.${NC} 添加群号到 群聊列表"
-        echo -e "${GREEN}3.${NC} 从 群聊列表 移除群号"
-        echo -e "${GREEN}4.${NC} 切换私聊名单类型 (白名单/黑名单)"
-        echo -e "${GREEN}5.${NC} 添加QQ到 私聊列表"
-        echo -e "${GREEN}6.${NC} 从 私聊列表 移除QQ"
-        echo -e "${GREEN}7.${NC} 添加QQ到 用户黑名单"
-        echo -e "${GREEN}8.${NC} 从 私聊列表 移除QQ"
+        echo -e "${GREEN}a.${NC} 添加群号到列表        ${RED}b.${NC} 从列表移除群号"
+        echo -e "${GREEN}c.${NC} 添加QQ到私聊列表      ${RED}d.${NC} 从私聊列表移除QQ"
+        echo -e "${YELLOW}t.${NC} 切换名单类型 (白名单/黑名单)"
         echo -e "${WHITE}0.${NC} 返回"
         echo -e ""
         read -p " 请选择操作: " m_opt
+        if [[ "$m_opt" == "0" ]]; then return; fi
 
-        if [[ "$m_opt" == "0" ]]; then
-            return
-        fi
-
-        local action=""
-        local key=""
+        local py_script=""
         local input_val=""
+        case $m_opt in
+            a|b|c|d)
+                read -p "请输入号码: " input_val
+                if [[ -z "$input_val" ]]; then continue; fi
+                ;;
+        esac
 
-        case "$m_opt" in
-            1) action="toggle"; key="group_list_type" ;;
-            2) action="add"; key="group_list" ;;
-            3) action="del"; key="group_list" ;;
-            4) action="toggle"; key="private_list_type" ;;
-            5) action="add"; key="private_list" ;;
-            6) action="del"; key="private_list" ;;
-            7) action="add"; key="ban_user_id" ;;
-            8) action="del"; key="ban_user_id" ;;
+        case $m_opt in
+            a) py_script="key='group_list'; action='add'; val=$input_val" ;;
+            b) py_script="key='group_list'; action='del'; val=$input_val" ;;
+            c) py_script="key='private_list'; action='add'; val=$input_val" ;;
+            d) py_script="key='private_list'; action='del'; val=$input_val" ;;
+            t) 
+                echo -e "1. 修改群聊模式 (group)  2. 修改私聊模式 (private)"
+                read -p "选择: " t_type
+                if [[ "$t_type" == "1" ]]; then py_script="key='group_list_type'; action='toggle'"; 
+                elif [[ "$t_type" == "2" ]]; then py_script="key='private_list_type'; action='toggle'"; 
+                else continue; fi
+                ;;
             *) continue ;;
         esac
 
-        if [[ "$action" == "add" || "$action" == "del" ]]; then
-            read -p "请输入号码: " input_val
-            [[ -z "$input_val" ]] && continue
-            if [[ ! "$input_val" =~ ^[0-9]+$ ]]; then
-                log_warning "号码必须为纯数字"
-                sleep 1
-                continue
-            fi
-        fi
-
+        # --- 写入部分（已修复错误） ---
         python3 - <<EOF
 import re
 import sys
-
 file_path = "$config_file"
-action = "$action"
-key = "$key"
-val = "$input_val"
-
+$py_script
 try:
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    if action == "toggle":
-        pattern = r'(^\\s*' + re.escape(key) + r'\\s*=\\s*")(\\w+)(".*)$'
-        m = re.search(pattern, content, re.MULTILINE)
-        if not m:
-            print("未找到配置项，操作中止")
-            sys.exit(0)
-        old = m.group(2)
-        new = "blacklist" if old == "whitelist" else "whitelist"
-        new_line = f'{m.group(1)}{new}{m.group(3)}'
-        content = re.sub(pattern, new_line, content, count=1, flags=re.MULTILINE)
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        print(f"已切换 {key}: {old} -> {new}")
+    with open(file_path, 'r', encoding='utf-8') as f: content = f.read()
+    if action == 'toggle':
+        pattern = r'(' + key + r'\s*=\s*")(\w+)(")'
+        def switch(match):
+            curr = match.group(2)
+            new_val = 'blacklist' if curr == 'whitelist' else 'whitelist'
+            print(f"模式已切换: {curr} -> {new_val}")
+            return f"{match.group(1)}{new_val}{match.group(3)}"
+        new_content = re.sub(pattern, switch, content, count=1)
     else:
-        pattern = r'(^\\s*' + re.escape(key) + r'\\s*=\\s*\\[)(.*?)(\\]\\s*(#.*)?$)'
-        m = re.search(pattern, content, re.MULTILINE | re.DOTALL)
-        if not m:
+        # --- 修复点：删除了末尾多余的 parameters 和右括号 ---
+        pattern = r'(' + key + r'\s*=\s*\[)(.*?)(\])'
+        match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+        if match:
+            nums = re.findall(r'\d+', match.group(2))
+            target = str(val)
+            if action == 'add':
+                if target in nums: print(f"号码 {target} 已存在。")
+                else: nums.append(target); print(f"已添加 {target}")
+            elif action == 'del':
+                if target in nums: nums = [n for n in nums if n != target]; print(f"已移除 {target}")
+                else: print(f"号码 {target} 不在列表中。")
+            new_list_str = ", ".join(nums) # 加个空格美观一点
+            new_content = content.replace(match.group(0), f"{match.group(1)}{new_list_str}{match.group(3)}")
+        else: 
             print("未找到配置项，操作中止")
             sys.exit(0)
-
-        nums = re.findall(r'\\d+', m.group(2))
-        target = str(val)
-
-        if action == "add":
-            if target in nums:
-                print(f"号码 {target} 已存在")
-            else:
-                nums.append(target)
-                print(f"已添加 {target}")
-        elif action == "del":
-            if target in nums:
-                nums = [n for n in nums if n != target]
-                print(f"已移除 {target}")
-            else:
-                print(f"号码 {target} 不在列表中")
-
-        new_list = ", ".join(nums)
-        new_block = f"{m.group(1)}{new_list}{m.group(3)}"
-        content = content.replace(m.group(0), new_block, 1)
-
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-except Exception as e:
-    print(f"修改失败: {e}")
+    with open(file_path, 'w', encoding='utf-8') as f: f.write(new_content)
+except Exception as e: print(f"修改失败: {e}")
 EOF
         read -p "按回车继续..."
     done
@@ -1185,54 +802,50 @@ manage_maibot_menu() {
     if ! check_screen_installed; then log_error "请先安装 screen"; return; fi
 
     local MAIBOT_DIR="$MAI_PATH/MaiBot"
+    local ADAPTER_DIR="$MAI_PATH/MaiBot-Napcat-Adapter"
+    local TTS_ADAPTER_DIR="$MAI_PATH/maimbot_tts_adapter"
     local VENV_PATH="$MAI_PATH/venv/bin/activate"
-    local PY_ENV_MODE="${MAI_PYTHON_ENV:-system}"
-    local SCREEN_NAME="maibot"
 
-    start_maibot() {
-        if [[ ! -d "$MAIBOT_DIR" ]]; then log_warning "MaiBot 目录不存在"; return; fi
-
-        echo -e "${YELLOW}⚠️  启动提示 ⚠️${NC}"
-        echo -e "如果是首次启动 MaiBot，你需要同意 ${CYAN}用户协议(EULA)${NC}。"
-        echo -e "1. 正常后台启动"
-        echo -e "2. 启动并进入控制台 (首次运行选这个)"
-        read -p "请选择 [1/2]: " run_mode
-
-        cd "$MAIBOT_DIR" || return
-        screen -list | grep -q "$SCREEN_NAME" && screen -S "$SCREEN_NAME" -X quit
-
-        if [[ "$PY_ENV_MODE" == "uv" ]]; then
-            ensure_uv_installed || return
-            screen -dmS "$SCREEN_NAME" bash -c "cd '$MAIBOT_DIR'; echo -e '${GREEN}MaiBot 启动中 (uv)...${NC}'; uv run bot.py; echo -e '${RED}MaiBot 已停止/崩溃。${NC}'; exec bash"
-        else
-            screen -dmS "$SCREEN_NAME" bash -c "source '$VENV_PATH'; echo -e '${GREEN}MaiBot 启动中...${NC}'; python3 bot.py; echo -e '${RED}MaiBot 已停止/崩溃。${NC}'; exec bash"
+    start_py_service() {
+        local name="$1"; local screen_name="$2"; local dir="$3"; local script="$4"
+        if [[ ! -d "$dir" ]]; then log_warning "$name 目录不存在"; return; fi
+        
+        if [[ "$name" == "MaiBot" ]]; then
+             echo -e "${YELLOW}⚠️  启动提示 ⚠️${NC}"
+             echo -e "如果是首次启动 MaiBot，你需要同意 ${CYAN}用户协议(EULA)${NC}。"
+             echo -e "1. 正常后台启动 (已同意过)"
+             echo -e "2. 启动并进入控制台 (首次运行选这个)"
+             read -p "请选择 [1/2]: " run_mode
+             cd "$dir" || return
+             screen -list | grep -q "$screen_name" && screen -S "$screen_name" -X quit
+             screen -dmS "$screen_name" bash -c "source '$VENV_PATH'; echo -e '${GREEN}$name 启动中...${NC}'; python3 $script; echo -e '${RED}$name 已停止/崩溃。${NC}'; exec bash"
+             sleep 1
+             if [[ "$run_mode" == "2" ]]; then
+                 echo -e "${GREEN}即将进入控制台... 按 Ctrl+A 然后 D 退出${NC}"
+                 read -p "按回车立即进入..." 
+                 screen -r "$screen_name"
+             else log_success "$name 已在后台启动"; fi
+             return
         fi
+
+        cd "$dir" || return
+        screen -list | grep -q "$screen_name" && screen -S "$screen_name" -X quit
+        echo -e "${BLUE}启动 $name...${NC}"
+        screen -dmS "$screen_name" bash -c "source '$VENV_PATH'; echo -e '${GREEN}$name 启动中...${NC}'; python3 $script; echo -e '${RED}$name 已停止/崩溃。${NC}'; exec bash"
         sleep 1
-
-        if [[ "$run_mode" == "2" ]]; then
-            echo -e "${GREEN}即将进入控制台... 按 Ctrl+A 然后 D 退出${NC}"
-            read -p "按回车立即进入..."
-            screen -r "$SCREEN_NAME"
-        else
-            log_success "MaiBot 已在后台启动"
-        fi
     }
 
-    stop_maibot() {
-        if screen -list | grep -q "$SCREEN_NAME"; then
-            screen -S "$SCREEN_NAME" -X quit
-            log_success "已停止 MaiBot"
-        else
-            echo -e "MaiBot 未运行"
-        fi
+    stop_py_service() {
+        local name="$1"; local screen_name="$2"
+        if screen -list | grep -q "$screen_name"; then screen -S "$screen_name" -X quit; log_success "已停止 $name"; else echo -e "$name 未运行"; fi
     }
 
     check_maibot_status() {
-        if screen -list | grep -q "$SCREEN_NAME"; then
-            echo -e " MaiBot(本体):\t${GREEN}● 运行中${NC}"
-        else
-            echo -e " MaiBot(本体):\t${RED}○ 未运行${NC}"
-        fi
+        local services=("mai-main:MaiBot(本体)" "mai-adapter:Adapter(适配器)" "mai-tts:TTS(语音)")
+        for s in "${services[@]}"; do
+            local screen_name=${s%%:*}; local display_name=${s##*:}
+            if screen -list | grep -q "$screen_name"; then echo -e " $display_name:\t${GREEN}● 运行中${NC}"; else echo -e " $display_name:\t${RED}○ 未运行${NC}"; fi
+        done
     }
 
     while true; do
@@ -1240,20 +853,27 @@ manage_maibot_menu() {
         echo -e "${BLUE}▶ MaiBot 核心管理${NC}"
         check_maibot_status
         draw_line
-        echo -e "${GREEN}1.${NC} 启动 MaiBot 本体"
-        echo -e "${GREEN}2.${NC} 停止 MaiBot 本体"
-        echo -e "${YELLOW}3.${NC} 进入 Screen 控制台 ${WHITE}(查看报错)${NC}"
+        echo -e "${GREEN}1.${NC} 一键开启 ${WHITE}(Bot + Adapter)${NC}"
+        echo -e "${GREEN}2.${NC} 一键停止 ${WHITE}(所有服务)${NC}"
         draw_line
+        echo -e "${CYAN}3.${NC} 开启 MaiBot 本体      ${CYAN}4.${NC} 停止 MaiBot 本体"
+        echo -e "${CYAN}5.${NC} 开启 Adapter 适配器   ${CYAN}6.${NC} 停止 Adapter 适配器"
+        draw_line
+        echo -e "${YELLOW}9.${NC} 进入 Screen 控制台 ${WHITE}(查看报错)${NC}"
         echo -e "${WHITE}0.${NC} 返回主菜单"
         echo -e ""
         read -p " 请选择: " m_choice
         case $m_choice in
-            1) start_maibot ;;
-            2) stop_maibot ;;
-            3) screen -r "$SCREEN_NAME" ;;
+            1) start_py_service "MaiBot" "mai-main" "$MAIBOT_DIR" "bot.py"; start_py_service "Adapter" "mai-adapter" "$ADAPTER_DIR" "main.py"; if [[ -d "$TTS_ADAPTER_DIR" ]]; then start_py_service "TTS" "mai-tts" "$TTS_ADAPTER_DIR" "main.py"; fi ;;
+            2) stop_py_service "MaiBot" "mai-main"; stop_py_service "Adapter" "mai-adapter"; stop_py_service "TTS" "mai-tts" ;;
+            3) start_py_service "MaiBot" "mai-main" "$MAIBOT_DIR" "bot.py" ;;
+            4) stop_py_service "MaiBot" "mai-main" ;;
+            5) start_py_service "Adapter" "mai-adapter" "$ADAPTER_DIR" "main.py" ;;
+            6) stop_py_service "Adapter" "mai-adapter" ;;
+            9) echo -e "a. MaiBot\nb. Adapter"; read -p "选择窗口: " v; if [[ "$v" == "a" ]]; then screen -r "mai-main"; elif [[ "$v" == "b" ]]; then screen -r "mai-adapter"; fi ;;
             0) return ;;
         esac
-        if [[ "$m_choice" != "3" && "$m_choice" != "0" ]]; then read -p "操作已执行，按回车继续..."; fi
+        if [[ "$m_choice" != "9" && "$m_choice" != "0" ]]; then read -p "操作已执行，按回车继续..."; fi
     done
 }
 
@@ -1277,11 +897,8 @@ manage_lpmm_menu() {
     local RAW_DIR="$DATA_DIR/lpmm_raw_data"
     local OPENIE_DIR="$DATA_DIR/openie"
     local VENV_PATH="$MAI_PATH/venv/bin/activate"
-    local PY_ENV_MODE="${MAI_PYTHON_ENV:-system}"
     local SCRIPT_INFO="$MAIBOT_DIR/scripts/info_extraction.py"
     local SCRIPT_IMPORT="$MAIBOT_DIR/scripts/import_openie.py"
-    local SCRIPT_INFO_REL="scripts/info_extraction.py"
-    local SCRIPT_IMPORT_REL="scripts/import_openie.py"
 
     # 检查必要目录和脚本是否存在
     if [[ ! -d "$MAIBOT_DIR" ]]; then
@@ -1364,13 +981,8 @@ manage_lpmm_menu() {
                 draw_header
                 echo -e "${BLUE}▶ 文本分割与实体提取 (前台)${NC}"
                 echo -e "${YELLOW}注意：此过程可能耗时较长，请勿关闭终端窗口！${NC}"
-                if [[ "$PY_ENV_MODE" == "uv" ]]; then
-                    echo -e "正在使用 uv 运行脚本...\n"
-                    cd "$MAIBOT_DIR" && uv run "$SCRIPT_INFO_REL"
-                else
-                    echo -e "正在激活虚拟环境并运行脚本...\n"
-                    bash -c "source '$VENV_PATH' && python '$SCRIPT_INFO'"
-                fi
+                echo -e "正在激活虚拟环境并运行脚本...\n"
+                bash -c "source '$VENV_PATH' && python '$SCRIPT_INFO'"
                 echo -e "\n${GREEN}脚本执行完毕。${NC}"
                 read -p "按回车继续..."
                 ;;
@@ -1402,12 +1014,7 @@ manage_lpmm_menu() {
                         2)
                             screen -S mai-lpmm-info -X quit 2>/dev/null
                             log_info "已关闭旧会话，重新启动..."
-                            if [[ "$PY_ENV_MODE" == "uv" ]]; then
-                                ensure_uv_installed || { read -p "按回车继续..."; continue; }
-                                screen -dmS mai-lpmm-info bash -c "cd '$MAIBOT_DIR'; uv run '$SCRIPT_INFO_REL'"
-                            else
-                                screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
-                            fi
+                            screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
                             log_success "已在后台启动，会话名: mai-lpmm-info"
                             echo -e "查看进度: ${CYAN}screen -r mai-lpmm-info${NC}"
                             echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
@@ -1419,12 +1026,7 @@ manage_lpmm_menu() {
                         3) ;;
                     esac
                 else
-                    if [[ "$PY_ENV_MODE" == "uv" ]]; then
-                        ensure_uv_installed || { read -p "按回车继续..."; continue; }
-                        screen -dmS mai-lpmm-info bash -c "cd '$MAIBOT_DIR'; uv run '$SCRIPT_INFO_REL'"
-                    else
-                        screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
-                    fi
+                    screen -dmS mai-lpmm-info bash -c "source '$VENV_PATH'; python '$SCRIPT_INFO'"
                     log_success "已在后台启动，会话名: mai-lpmm-info"
                     echo -e "查看进度: ${CYAN}screen -r mai-lpmm-info${NC}"
                     echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
@@ -1455,13 +1057,8 @@ manage_lpmm_menu() {
                 draw_header
                 echo -e "${BLUE}▶ 导入LPMM知识库 (前台)${NC}"
                 echo -e "${YELLOW}注意：此过程可能耗时较长，请勿关闭终端窗口！${NC}"
-                if [[ "$PY_ENV_MODE" == "uv" ]]; then
-                    echo -e "正在使用 uv 运行脚本...\n"
-                    cd "$MAIBOT_DIR" && uv run "$SCRIPT_IMPORT_REL"
-                else
-                    echo -e "正在激活虚拟环境并运行脚本...\n"
-                    bash -c "source '$VENV_PATH' && python '$SCRIPT_IMPORT'"
-                fi
+                echo -e "正在激活虚拟环境并运行脚本...\n"
+                bash -c "source '$VENV_PATH' && python '$SCRIPT_IMPORT'"
                 echo -e "\n${GREEN}脚本执行完毕。${NC}"
                 read -p "按回车继续..."
                 ;;
@@ -1493,12 +1090,7 @@ manage_lpmm_menu() {
                         2)
                             screen -S mai-lpmm-import -X quit 2>/dev/null
                             log_info "已关闭旧会话，重新启动..."
-                            if [[ "$PY_ENV_MODE" == "uv" ]]; then
-                                ensure_uv_installed || { read -p "按回车继续..."; continue; }
-                                screen -dmS mai-lpmm-import bash -c "cd '$MAIBOT_DIR'; uv run '$SCRIPT_IMPORT_REL'"
-                            else
-                                screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
-                            fi
+                            screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
                             log_success "已在后台启动，会话名: mai-lpmm-import"
                             echo -e "查看进度: ${CYAN}screen -r mai-lpmm-import${NC}"
                             echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
@@ -1510,12 +1102,7 @@ manage_lpmm_menu() {
                         3) ;;
                     esac
                 else
-                    if [[ "$PY_ENV_MODE" == "uv" ]]; then
-                        ensure_uv_installed || { read -p "按回车继续..."; continue; }
-                        screen -dmS mai-lpmm-import bash -c "cd '$MAIBOT_DIR'; uv run '$SCRIPT_IMPORT_REL'"
-                    else
-                        screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
-                    fi
+                    screen -dmS mai-lpmm-import bash -c "source '$VENV_PATH'; python '$SCRIPT_IMPORT'"
                     log_success "已在后台启动，会话名: mai-lpmm-import"
                     echo -e "查看进度: ${CYAN}screen -r mai-lpmm-import${NC}"
                     echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
@@ -1562,7 +1149,6 @@ manage_plugins_menu() {
     local MAIBOT_DIR="$MAI_PATH/MaiBot"
     local PLUGINS_DIR="$MAIBOT_DIR/plugins"
     local VENV_PATH="$MAI_PATH/venv/bin/activate"
-    local PY_ENV_MODE="${MAI_PYTHON_ENV:-system}"
 
     if [[ ! -d "$MAIBOT_DIR" ]]; then
         log_error "MaiBot 目录不存在: $MAIBOT_DIR"
@@ -1784,15 +1370,8 @@ manage_plugins_menu() {
 
                 if [[ -f "$plugin_path/requirements.txt" ]]; then
                     echo -e "\n${BLUE}▶ 安装插件依赖${NC}"
-                    if [[ "$PY_ENV_MODE" == "uv" ]]; then
-                        ensure_uv_installed || { read -p "按回车继续..."; continue; }
-                        cd "$MAIBOT_DIR" || continue
-                        uv pip install -r "$plugin_path/requirements.txt"
-                    else
-                        source "$VENV_PATH"
-                        pip install -r "$plugin_path/requirements.txt"
-                    fi
-
+                    source "$VENV_PATH"
+                    pip install -r "$plugin_path/requirements.txt"
                     if [ $? -eq 0 ]; then
                         log_success "依赖安装成功"
                     else
@@ -1915,14 +1494,8 @@ manage_plugins_menu() {
                 fi
 
                 echo -e "\n${BLUE}正在安装 ${CYAN}$target_plugin${NC} 的依赖...${NC}"
-                if [[ "$PY_ENV_MODE" == "uv" ]]; then
-                    ensure_uv_installed || { read -p "按回车继续..."; continue; }
-                    cd "$MAIBOT_DIR" || continue
-                    uv pip install -r "$target_path/requirements.txt"
-                else
-                    source "$VENV_PATH"
-                    pip install -r "$target_path/requirements.txt"
-                fi
+                source "$VENV_PATH"
+                pip install -r "$target_path/requirements.txt"
                 if [ $? -eq 0 ]; then
                     log_success "依赖安装成功"
                 else
@@ -1962,12 +1535,10 @@ main_menu() {
                 INSTALLATION_ACTIVE=true
                 configure_install_path
                 step_install_mode
-                step_python_env_mode
                 step_venv_mode
                 configure_github
                 configure_pip
                 configure_napcat_selection
-                prepare_napcat_docker
                 run_install
                 INSTALLATION_ACTIVE=false
                 ;;
