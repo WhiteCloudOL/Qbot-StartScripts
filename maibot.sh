@@ -60,6 +60,7 @@ draw_header() {
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
     echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.8${NC}               ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}                ${WHITE}现已支持 MaiBot v1.0${NC}                    ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
     
     # 状态栏
@@ -1327,6 +1328,7 @@ manage_lpmm_menu() {
         draw_header
         echo -e "${BLUE}▶ LPMM 知识库管理${NC}"
         echo -e " 数据目录: ${CYAN}$DATA_DIR${NC}"
+        echo -e "${YELLOW} 知识库管理暂不可用，请等待官方更新！"
 
         # 后台任务状态显示
         local info_status import_status
@@ -1968,7 +1970,7 @@ main_menu() {
         echo -e "${PURPLE}2.${NC} 管理 MaiBot 核心${NC}"
         echo -e "${CYAN}3.${NC} 管理 NapCat 服务${NC}"
         echo -e "${BLUE}4.${NC} 配置与访问${NC}"
-        echo -e "${YELLOW}5.${NC} LPMM知识库${NC}"
+        echo -e "${YELLOW}5.${NC} LPMM知识库${YELLOW}(等待官方更新)${NC}"
         echo -e "${GREEN}6.${NC} 插件管理${NC}"
         draw_line
         echo -e "${WHITE}0.${NC} 退出脚本"
