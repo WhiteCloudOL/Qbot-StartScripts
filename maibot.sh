@@ -209,6 +209,11 @@ git_clone_safe() {
     if [[ "$target_dir" != /* ]]; then
         target_dir="$install_path/$dir"
     fi
+
+    local should_remove_uv_lock="false"
+    if [[ "$USER_PYTHON_ENV" == "uv" && "$(basename "$target_dir")" == "MaiBot" ]]; then
+        should_remove_uv_lock="true"
+    fi
     
     # 目录存在处理逻辑
     if [[ -d "$target_dir" ]]; then
@@ -218,6 +223,10 @@ git_clone_safe() {
         else
             log_info "检测到目录 ${CYAN}$target_dir${NC} 已存在，尝试更新..."
             cd "$target_dir" || return 1
+            if [[ "$should_remove_uv_lock" == "true" && -f "uv.lock" ]]; then
+                log_warning "检测到 MaiBot 主程序目录下存在 uv.lock，更新前先移除以避免 git/uv 冲突..."
+                rm -f uv.lock
+            fi
             if [[ -n "$branch" ]]; then
                 git fetch origin "$branch"
                 git checkout "$branch"
@@ -603,7 +612,7 @@ run_install() {
 
     echo -e "\n${BLUE}▶ 下载/更新组件...${NC}"
     git_clone_safe "$(get_url 'MaiM-with-u/MaiBot')" "MaiBot" "main"
-    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot-Napcat-Adapter')" "MaiBot/plugins/MaiBot-Napcat-Adapter" "plugin"
+    git_clone_safe "$(get_url 'MaiM-with-u/MaiBot-Napcat-Adapter')" "MaiBot/plugins/MaiBot-Napcat-Adapter" "main"
     
     echo -e "\n${BLUE}▶ 初始化配置文件...${NC}"
     
@@ -613,6 +622,11 @@ run_install() {
     if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
         ensure_uv_installed || return
         cd "$USER_INSTALL_PATH/MaiBot" || exit 1
+
+        if [[ -f "uv.lock" ]]; then
+            log_warning "检测到 MaiBot 主程序目录下存在 uv.lock，先移除以避免依赖冲突..."
+            rm -f uv.lock
+        fi
 
         if [[ -n "$USER_UV_INDEX" ]]; then
             export UV_INDEX_URL="$USER_UV_INDEX"
