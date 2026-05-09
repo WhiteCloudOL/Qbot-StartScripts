@@ -58,7 +58,7 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 draw_header() {
     clear
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.8${NC}               ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.9${NC}               ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                ${WHITE}现已支持 MaiBot v1.0${NC}                    ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
