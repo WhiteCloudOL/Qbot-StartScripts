@@ -58,7 +58,7 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 draw_header() {
     clear
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.9${NC}               ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.10${NC}               ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                ${WHITE}现已支持 MaiBot v1.0${NC}                    ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
@@ -513,10 +513,12 @@ configure_pip() {
     echo -e "${GREY}该配置会同时用于 pip 与 uv。${NC}"
 
     echo -e "${GREEN}1.${NC} 保持现状/系统默认"
-    echo -e "${GREEN}2.${NC} 阿里云"
+    echo -e "${GREEN}2.${NC} 阿里云${YELLOW}(国内首选，下载速度快)${NC}"
     echo -e "${GREEN}3.${NC} 清华大学"
-    echo -e "${GREEN}4.${NC} 官方源"
-    read -p "选择 [1-4] (默认1): " pip_choice
+    echo -e "${GREEN}4.${NC} 中国科学技术大学${YELLOW}(国内次选，同步较快)${NC}"
+    echo -e "${GREEN}5.${NC} 官方源${YELLOW}(海外首选)${NC}"
+    echo -e "${GREEN}6.${NC} 自定义镜像源"
+    read -p "选择 [1-6] (默认1): " pip_choice
     case ${pip_choice:-1} in
         2)
             USER_PIP_DISPLAY="阿里云"
@@ -531,10 +533,34 @@ configure_pip() {
             USER_UV_INDEX="$USER_PIP_INDEX"
             ;;
         4)
+            USER_PIP_DISPLAY="中国科学技术大学"
+            USER_PIP_INDEX="https://pypi.mirrors.ustc.edu.cn/simple/"
+            USER_PIP_HOST="pypi.mirrors.ustc.edu.cn"
+            USER_UV_INDEX="$USER_PIP_INDEX"
+            ;;
+        5)
             USER_PIP_DISPLAY="官方源"
             USER_PIP_INDEX="https://pypi.org/simple"
             USER_PIP_HOST="pypi.org"
             USER_UV_INDEX="$USER_PIP_INDEX"
+            ;;
+        6)
+            read -p "请输入自定义镜像源 URL: " custom_pip_index
+            custom_pip_index="${custom_pip_index//[[:space:]]/}"
+            if [[ -z "$custom_pip_index" ]]; then
+                USER_PIP_DISPLAY="系统默认"
+                USER_PIP_INDEX=""
+                USER_PIP_HOST=""
+                USER_UV_INDEX=""
+            else
+                if [[ "$custom_pip_index" != http://* && "$custom_pip_index" != https://* ]]; then
+                    custom_pip_index="https://$custom_pip_index"
+                fi
+                USER_PIP_DISPLAY="$custom_pip_index"
+                USER_PIP_INDEX="$custom_pip_index"
+                USER_PIP_HOST=$(echo "$custom_pip_index" | awk -F/ '{print $3}')
+                USER_UV_INDEX="$USER_PIP_INDEX"
+            fi
             ;;
         *)
             USER_PIP_DISPLAY="系统默认"
@@ -1342,7 +1368,7 @@ manage_lpmm_menu() {
         draw_header
         echo -e "${BLUE}▶ LPMM 知识库管理${NC}"
         echo -e " 数据目录: ${CYAN}$DATA_DIR${NC}"
-        echo -e "${YELLOW} 知识库管理暂不可用，请等待官方更新！"
+        echo -e "${YELLOW} 知识库管理暂不可用，请等待官方更新！${NC}"
 
         # 后台任务状态显示
         local info_status import_status
