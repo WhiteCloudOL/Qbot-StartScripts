@@ -356,6 +356,7 @@ check_screen_installed() {
 git_update_safe() {
     local repo_dir="$1"
     local branch="$2"
+    local remote_url="$3"
 
     if [[ ! -d "$repo_dir/.git" ]]; then
         log_error "目录不是 Git 仓库: $repo_dir"
@@ -363,6 +364,19 @@ git_update_safe() {
     fi
 
     cd "$repo_dir" || return 1
+
+    if [[ -n "$remote_url" ]]; then
+        local current_origin_url
+        current_origin_url=$(git remote get-url origin 2>/dev/null)
+        if [[ -n "$current_origin_url" && "$current_origin_url" != "$remote_url" ]]; then
+            log_info "检测到 origin 远程地址与当前选择不一致，正在切换为: $remote_url"
+            git remote set-url origin "$remote_url"
+            if [[ $? -ne 0 ]]; then
+                log_error "更新 origin 远程地址失败。"
+                return 1
+            fi
+        fi
+    fi
 
     if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
         echo -e "${YELLOW}检测到仓库存在未提交改动:${NC} $repo_dir"
@@ -472,7 +486,7 @@ git_clone_safe() {
                 rm -f "$target_dir/uv.lock"
             fi
 
-            git_update_safe "$target_dir" "$branch"
+            git_update_safe "$target_dir" "$branch" "$url"
             local update_result=$?
             if [[ $update_result -eq 0 ]]; then
                 cd "$install_path" || return 1
@@ -1921,7 +1935,7 @@ manage_plugins_menu() {
 
                 if [[ -d "$plugin_path" ]]; then
                     log_info "检测到插件已存在，尝试更新..."
-                    git_update_safe "$plugin_path"
+                    git_update_safe "$plugin_path" "" "$git_url"
                     if [ $? -eq 0 ]; then
                         log_success "插件更新成功"
                         cd "$MAI_PATH" || continue
