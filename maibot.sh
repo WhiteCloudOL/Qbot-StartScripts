@@ -26,7 +26,9 @@ GITHUB_MIRRORS=(
     "https://gh-proxy.org"
     "https://hk.gh-proxy.org"
     "https://cdn.gh-proxy.org"
-    "https://gh.llkk.cc"
+    "https://ghproxy.net"
+    "https://ghfast.top"
+    "https://git.yylx.win"
     "https://github.moeyy.xyz"
 )
 
@@ -38,7 +40,7 @@ USER_INSTALL_PATH=""
 USER_INSTALL_MODE=""   # normal / clean
 USER_PYTHON_ENV=""     # system / uv
 USER_VENV_MODE=""      # keep / recreate
-USER_GH_PROXY=""
+USER_GH_PROXY=""       # GitHub 镜像源配置
 USER_PIP_DISPLAY=""    # UI显示用
 USER_PIP_INDEX=""      # pip 实际配置
 USER_PIP_HOST=""       # pip 实际配置
@@ -58,7 +60,7 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 draw_header() {
     clear
     echo -e "${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.10${NC}              ${PURPLE}│${NC}"
+    echo -e "${PURPLE}│${NC}           ${WHITE}MaiBot 一键部署与管理脚本 ${CYAN}v1.11${NC}              ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                 ${WHITE}Copyright@清蒸云鸭${NC}                     ${PURPLE}│${NC}"
     echo -e "${PURPLE}│${NC}                ${WHITE}现已支持 MaiBot v1.0${NC}                    ${PURPLE}│${NC}"
     echo -e "${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
@@ -121,6 +123,169 @@ draw_header() {
 # --- 分隔线 ---
 draw_line() {
     echo -e "${PURPLE}──────────────────────────────────────────────────────────${NC}"
+}
+
+confirm_and_enter_screen() {
+    local screen_name="$1"
+    local cancel_message="${2:-已取消进入 Screen 窗口。}"
+
+    echo -e "${YELLOW}进入 Screen 前请注意：必须使用 ${WHITE}Ctrl+A 然后按下 D${YELLOW} 退出窗口。${NC}"
+    echo -e "${RED}如果直接关闭终端或使用错误方式退出，可能导致后续管理出现问题。${NC}"
+    read -p "确认已知晓并进入 Screen？请输入 y 确认: " enter_screen_confirm
+    if [[ "$enter_screen_confirm" == "y" || "$enter_screen_confirm" == "Y" ]]; then
+        screen -r "$screen_name"
+    else
+        log_info "$cancel_message"
+    fi
+}
+
+run_github_speedtest() {
+    echo -e "${YELLOW}正在并行测速，请稍候...${NC}"
+    local temp_dir=$(mktemp -d)
+    local mirrors=("https://github.com" "${GITHUB_MIRRORS[@]}")
+
+    for mirror in "${mirrors[@]}"; do
+        (
+            local test_url
+            [[ "$mirror" == "https://github.com" ]] && test_url="$TEST_FILE_PATH" || test_url="${mirror}/${TEST_FILE_PATH}"
+
+            local time_cost
+            time_cost=$(curl -sL -o /dev/null --max-time 3 -w "%{time_total}" "$test_url")
+            local exit_code=$?
+
+            if [[ $exit_code -eq 0 ]]; then
+                local ms=$(awk -v t="$time_cost" 'BEGIN {printf "%.0f", t*1000}')
+                echo "$ms $mirror" >> "$temp_dir/results"
+            else
+                echo "9999 $mirror" >> "$temp_dir/results"
+            fi
+        ) &
+    done
+    wait
+
+    echo -e "\n   延迟(ms) | 线路地址"
+    echo -e "------------|----------------------------------"
+
+    local best_mirror=""
+    local best_ms=9999
+
+    if [[ -f "$temp_dir/results" ]]; then
+        sort -n "$temp_dir/results" > "$temp_dir/sorted"
+
+        while read -r line; do
+            local ms=$(echo "$line" | awk '{print $1}')
+            local url=$(echo "$line" | awk '{print $2}')
+
+            if [[ "$ms" == "9999" ]]; then
+                echo -e " ${RED}超时/失败${NC}| $url"
+            else
+                if [[ -z "$best_mirror" ]]; then
+                    best_mirror=$url
+                    best_ms=$ms
+                fi
+
+                local color=$GREEN
+                if [ "$ms" -gt 800 ]; then color=$YELLOW; fi
+                if [ "$ms" -gt 1500 ]; then color=$RED; fi
+                echo -e " ${color}${ms}ms${NC}\t| $url"
+            fi
+        done < "$temp_dir/sorted"
+    fi
+
+    if [[ -n "$best_mirror" ]]; then
+        USER_GH_PROXY="$best_mirror"
+        echo -e "\n自动选择: ${CYAN}$best_mirror${NC} (延迟: ${best_ms}ms)"
+    else
+        USER_GH_PROXY="https://gh-proxy.org"
+        echo -e "\n${RED}测速全失败，使用默认代理。${NC}"
+    fi
+
+    rm -rf "$temp_dir"
+    sleep 2
+}
+
+choose_github_proxy() {
+    echo -e "${GREEN}1.${NC} 自动测速选择最佳线路 ${YELLOW}(推荐)${NC}"
+    echo -e "${GREEN}2.${NC} 手动选择线路"
+    echo -e "${GREEN}3.${NC} 官方直连"
+    echo -e "${GREEN}4.${NC} 自定义镜像源"
+    read -p "选择 [1-4] (默认1): " gh_choice
+    case ${gh_choice:-1} in
+        2)
+            select mirror in "${GITHUB_MIRRORS[@]}"; do
+                USER_GH_PROXY="$mirror"
+                break
+            done
+            ;;
+        3)
+            USER_GH_PROXY="https://github.com"
+            ;;
+        4)
+            echo -e "${YELLOW}请输入自定义 GitHub 镜像源，格式类似: https://gh-proxy.org${NC}"
+            echo -e "${YELLOW}注意：末尾不要加 / ${NC}"
+            read -p "请输入: " custom_gh_proxy
+            custom_gh_proxy="${custom_gh_proxy%/}"
+            if [[ -n "$custom_gh_proxy" ]]; then
+                USER_GH_PROXY="$custom_gh_proxy"
+            else
+                log_warning "未输入自定义镜像源，改为自动测速选择。"
+                run_github_speedtest
+            fi
+            ;;
+        *)
+            run_github_speedtest
+            ;;
+    esac
+}
+
+convert_github_url() {
+    local url="$1"
+
+    url="${url%.git}"
+
+    local repo=""
+    if [[ "$url" =~ github\.com/([^/]+/[^/]+)$ ]]; then
+        repo="${BASH_REMATCH[1]}"
+    else
+        echo "$url"
+        return
+    fi
+
+    if [[ "$USER_GH_PROXY" == "https://github.com" ]]; then
+        echo "https://github.com/$repo.git"
+    else
+        echo "${USER_GH_PROXY}/https://github.com/${repo}.git"
+    fi
+}
+
+get_plugin_names() {
+    local plugins_dir="$1"
+    [[ ! -d "$plugins_dir" ]] && return
+
+    local dir
+    for dir in "$plugins_dir"/*; do
+        local dir_name
+        dir_name="$(basename "$dir")"
+        if [[ -d "$dir" && "$dir_name" != "__pycache__" && "$dir_name" != "data" ]]; then
+            basename "$dir"
+        fi
+    done
+}
+
+list_plugins_display() {
+    local plugins_dir="$1"
+    local count=0
+    local plugin_name
+
+    while IFS= read -r plugin_name; do
+        [[ -z "$plugin_name" ]] && continue
+        count=$((count + 1))
+        echo -e " ${CYAN}$plugin_name${NC}"
+    done < <(get_plugin_names "$plugins_dir")
+
+    if [[ $count -eq 0 ]]; then
+        echo -e " ${GREY}(无插件)${NC}"
+    fi
 }
 
 load_config() {
@@ -188,6 +353,85 @@ check_screen_installed() {
     return 0
 }
 
+git_update_safe() {
+    local repo_dir="$1"
+    local branch="$2"
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        log_error "目录不是 Git 仓库: $repo_dir"
+        return 2
+    fi
+
+    cd "$repo_dir" || return 1
+
+    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+        echo -e "${YELLOW}检测到仓库存在未提交改动:${NC} $repo_dir"
+        echo -e "${GREEN}1.${NC} 临时保存改动后更新${NC}"
+        echo -e "${RED}2.${NC} 丢弃本地改动并强制同步 ${YELLOW}(推荐)${NC}"
+        echo -e "${WHITE}3.${NC} 取消更新"
+        read -p "请选择 [1-3] (默认3): " dirty_choice
+        case ${dirty_choice:-3} in
+            1)
+                git stash push -u -m "maibot-auto-update-$(date +%Y%m%d-%H%M%S)"
+                if [[ $? -ne 0 ]]; then
+                    log_error "保存本地改动失败，已取消更新。"
+                    return 1
+                fi
+                ;;
+            2)
+                git reset --hard HEAD
+                git clean -fd
+                ;;
+            *)
+                log_warning "已取消更新。"
+                return 1
+                ;;
+        esac
+    fi
+
+    if [[ -n "$branch" ]]; then
+        git fetch --depth 1 origin "$branch"
+        if [[ $? -ne 0 ]]; then
+            log_error "获取远程分支失败: $branch"
+            return 1
+        fi
+
+        git checkout -B "$branch" "origin/$branch"
+        if [[ $? -ne 0 ]]; then
+            log_error "切换分支失败: $branch"
+            return 1
+        fi
+
+        git reset --hard "origin/$branch"
+        if [[ $? -ne 0 ]]; then
+            log_error "同步远程分支失败: origin/$branch"
+            return 1
+        fi
+    else
+        local current_branch
+        current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+        if [[ -z "$current_branch" || "$current_branch" == "HEAD" ]]; then
+            log_error "无法识别当前分支，已取消更新。"
+            return 1
+        fi
+
+        git fetch --depth 1 origin "$current_branch"
+        if [[ $? -ne 0 ]]; then
+            log_error "获取远程分支失败: $current_branch"
+            return 1
+        fi
+
+        git reset --hard "origin/$current_branch"
+        if [[ $? -ne 0 ]]; then
+            log_error "同步远程分支失败: origin/$current_branch"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
 # Git Clone
 git_clone_safe() {
     local url="$1"
@@ -222,18 +466,13 @@ git_clone_safe() {
             rm -rf "$target_dir"
         else
             log_info "检测到目录 ${CYAN}$target_dir${NC} 已存在，尝试更新..."
-            cd "$target_dir" || return 1
-            if [[ "$should_remove_uv_lock" == "true" && -f "uv.lock" ]]; then
+
+            if [[ "$should_remove_uv_lock" == "true" && -f "$target_dir/uv.lock" ]]; then
                 log_warning "检测到 MaiBot 主程序目录下存在 uv.lock，更新前先移除以避免 git/uv 冲突..."
-                rm -f uv.lock
+                rm -f "$target_dir/uv.lock"
             fi
-            if [[ -n "$branch" ]]; then
-                git fetch origin "$branch"
-                git checkout "$branch"
-                git pull origin "$branch"
-            else
-                git pull
-            fi
+
+            git_update_safe "$target_dir" "$branch"
             if [ $? -eq 0 ]; then
                 cd "$install_path" || return 1
                 return 0
@@ -247,27 +486,29 @@ git_clone_safe() {
         fi
     fi
 
-    log_info "正在克隆 ${CYAN}$dir${NC} (显示进度)..."
-    if [[ -n "$branch" ]]; then
-        git clone --depth 1 --progress -b "$branch" "$url" "$target_dir"
-    else
-        git clone --depth 1 --progress "$url" "$target_dir"
-    fi
-    
-    if [ $? -eq 0 ]; then
-        log_success "$dir 克隆成功"
-        return 0
-    else
-        log_error "克隆失败！请检查网络或更换加速源。"
-        rm -rf "$target_dir"
-        echo -e "1. 重试  2. 跳过  3. 退出"
-        read -p "请选择: " retry_choice
-        case $retry_choice in
-            2) return 1 ;;
-            3) exit 1 ;;
-            *) ;; 
-        esac
-    fi
+    while true; do
+        log_info "正在克隆 ${CYAN}$dir${NC}..."
+        if [[ -n "$branch" ]]; then
+            git clone --depth 1 --progress -b "$branch" "$url" "$target_dir"
+        else
+            git clone --depth 1 --progress "$url" "$target_dir"
+        fi
+
+        if [ $? -eq 0 ]; then
+            log_success "$dir 克隆成功"
+            return 0
+        else
+            log_error "克隆失败！请检查网络或更换加速源。"
+            rm -rf "$target_dir"
+            echo -e "1. 重试  2. 跳过  3. 退出"
+            read -p "请选择: " retry_choice
+            case $retry_choice in
+                2) return 1 ;;
+                3) exit 1 ;;
+                *) ;;
+            esac
+        fi
+    done
 }
 
 # Docker Compose Up
@@ -287,6 +528,37 @@ docker_compose_safe() {
     done
 }
 
+remove_existing_napcat_containers() {
+    if ! command -v docker &> /dev/null; then
+        log_error "未检测到 Docker，无法移除 NapCat 容器。"
+        return 1
+    fi
+
+    local napcat_containers
+    napcat_containers=$(docker ps -a --format '{{.Names}}' | grep '^napcat' || true)
+
+    if [[ -z "$napcat_containers" ]]; then
+        log_info "未找到名称以 napcat 开头的容器。"
+        return 0
+    fi
+
+    echo -e "${YELLOW}将移除以下 NapCat 容器:${NC}"
+    echo "$napcat_containers" | sed 's/^/ - /'
+
+    while read -r container_name; do
+        [[ -z "$container_name" ]] && continue
+        docker rm -f "$container_name"
+    done <<< "$napcat_containers"
+
+    if [[ $? -eq 0 ]]; then
+        log_success "NapCat 容器移除完成。"
+        return 0
+    else
+        log_error "NapCat 容器移除失败。"
+        return 1
+    fi
+}
+
 # Docker 安装函数
 install_docker_safe() {
     while true; do
@@ -304,9 +576,9 @@ install_docker_safe() {
 configure_docker_mirror() {
     if ! command -v docker &> /dev/null; then return; fi
     echo -e "${BLUE}▶ Docker 镜像加速配置${NC}"
-    echo -e "${GREEN}1.${NC} docker.1ms.run ${WHITE}(国内推荐)${NC}"
-    echo -e "${GREEN}2.${NC} docker.xuanyuan.me ${WHITE}(国内推荐)${NC}"
-    echo -e "${GREEN}3.${NC} 恢复官方源"
+    echo -e "${GREEN}1.${NC} docker.1ms.run ${WHITE}(国内首选)${NC}"
+    echo -e "${GREEN}2.${NC} docker.xuanyuan.me ${WHITE}(国内次选)${NC}"
+    echo -e "${GREEN}3.${NC} 官方源 ${WHITE}(香港/海外首选)${NC}"
     echo -e "${GREEN}4.${NC} 保持不变"
     read -p "请选择 [1-4] (默认4): " mirror_choice
     mirror_choice=${mirror_choice:-4}
@@ -408,12 +680,12 @@ step_venv_mode() {
     draw_header
     if [[ "$USER_PYTHON_ENV" == "uv" ]]; then
         echo -e "${BLUE}▶ 4/6 uv 虚拟环境处理${NC}"
-        echo -e "${GREEN}1.${NC} 保留现有 .venv ${WHITE}(速度快，适合小更新)${NC}"
-        echo -e "${YELLOW}2.${NC} 删除并重建 .venv ${WHITE}(推荐，彻底解决依赖冲突)${NC}"
+        echo -e "${GREEN}1.${NC} 保留现有 .venv ${WHITE}(首选)${NC}"
+        echo -e "${YELLOW}2.${NC} 删除并重建 .venv ${WHITE}(如有依赖冲突选这个)${NC}"
     else
         echo -e "${BLUE}▶ 4/6 Python 虚拟环境处理${NC}"
-        echo -e "${GREEN}1.${NC} 保留现有环境 ${WHITE}(速度快，适合小更新)${NC}"
-        echo -e "${YELLOW}2.${NC} 删除并重建环境 ${WHITE}(推荐，彻底解决依赖冲突)${NC}"
+        echo -e "${GREEN}1.${NC} 保留现有环境 ${WHITE}(首选)${NC}"
+        echo -e "${YELLOW}2.${NC} 删除并重建环境 ${WHITE}(如有依赖冲突选这个)${NC}"
     fi
 
     read -p "请选择 [1-2] (默认1): " venv_choice
@@ -423,88 +695,7 @@ step_venv_mode() {
 configure_github() {
     draw_header
     echo -e "${BLUE}▶ 5/6 GitHub 线路配置${NC}"
-    
-    run_speedtest() {
-        echo -e "${YELLOW}正在并行测速，请稍候...${NC}"
-        local temp_dir=$(mktemp -d)
-        local mirrors=("https://github.com" "${GITHUB_MIRRORS[@]}")
-        
-        # 并行执行测速
-        for mirror in "${mirrors[@]}"; do
-            (
-                local test_url
-                [[ "$mirror" == "https://github.com" ]] && test_url="$TEST_FILE_PATH" || test_url="${mirror}/${TEST_FILE_PATH}"
-                
-                # 设置超时3秒
-                local time_cost
-                time_cost=$(curl -sL -o /dev/null --max-time 3 -w "%{time_total}" "$test_url")
-                local exit_code=$?
-                
-                if [[ $exit_code -eq 0 ]]; then
-                    # awk 计算毫秒取整
-                    local ms=$(awk -v t="$time_cost" 'BEGIN {printf "%.0f", t*1000}')
-                    echo "$ms $mirror" >> "$temp_dir/results"
-                else
-                    # 9999 代表超时
-                    echo "9999 $mirror" >> "$temp_dir/results"
-                fi
-            ) &
-        done
-        wait # 等待所有后台任务完成
-        
-        # 显示结果
-        echo -e "\n   延迟(ms) | 线路地址"
-        echo -e "------------|----------------------------------"
-        
-        local best_mirror=""
-        local best_ms=9999
-
-        if [[ -f "$temp_dir/results" ]]; then
-            # 排序
-            sort -n "$temp_dir/results" > "$temp_dir/sorted"
-            
-            while read line; do
-                local ms=$(echo $line | awk '{print $1}')
-                local url=$(echo $line | awk '{print $2}')
-                
-                if [[ "$ms" == "9999" ]]; then
-                    echo -e " ${RED}超时/失败${NC}| $url"
-                else
-                    # 设置最佳镜像
-                    if [[ -z "$best_mirror" ]]; then
-                        best_mirror=$url
-                        best_ms=$ms
-                    fi
-                    
-                    local color=$GREEN
-                    if [ "$ms" -gt 800 ]; then color=$YELLOW; fi
-                    if [ "$ms" -gt 1500 ]; then color=$RED; fi
-                    echo -e " ${color}${ms}ms${NC}\t| $url"
-                fi
-            done < "$temp_dir/sorted"
-        fi
-
-        if [[ -n "$best_mirror" ]]; then
-            USER_GH_PROXY="$best_mirror"
-            echo -e "\n自动选择: ${CYAN}$best_mirror${NC} (延迟: ${best_ms}ms)"
-        else
-            USER_GH_PROXY="https://gh-proxy.org"
-            echo -e "\n${RED}测速全失败，使用默认代理。${NC}"
-        fi
-        
-        rm -rf "$temp_dir"
-        sleep 2
-    }
-
-    echo -e "${GREEN}1.${NC} 自动测速选择最佳线路 ${WHITE}(并行极速)${NC}"
-    echo -e "${GREEN}2.${NC} 手动选择线路"
-    echo -e "${GREEN}3.${NC} 官方直连"
-    read -p "选择 [1-3] (默认1): " gh_choice
-    case ${gh_choice:-1} in
-        2) select mirror in "${GITHUB_MIRRORS[@]}"; do USER_GH_PROXY="$mirror"; break; done ;;
-        3) USER_GH_PROXY="https://github.com" ;;
-        *) run_speedtest ;;
-    esac
+    choose_github_proxy
 }
 
 configure_pip() {
@@ -514,11 +705,12 @@ configure_pip() {
 
     echo -e "${GREEN}1.${NC} 保持现状/系统默认"
     echo -e "${GREEN}2.${NC} 阿里云${YELLOW}(国内首选，下载速度快)${NC}"
-    echo -e "${GREEN}3.${NC} 清华大学"
-    echo -e "${GREEN}4.${NC} 中国科学技术大学${YELLOW}(国内次选，同步较快)${NC}"
-    echo -e "${GREEN}5.${NC} 官方源${YELLOW}(海外首选)${NC}"
-    echo -e "${GREEN}6.${NC} 自定义镜像源"
-    read -p "选择 [1-6] (默认1): " pip_choice
+    echo -e "${GREEN}3.${NC} 腾讯云"
+    echo -e "${GREEN}4.${NC} 清华大学"
+    echo -e "${GREEN}5.${NC} 中国科学技术大学${NC}"
+    echo -e "${GREEN}6.${NC} 官方源${YELLOW}(海外首选)${NC}"
+    echo -e "${GREEN}7.${NC} 自定义镜像源"
+    read -p "选择 [1-7] (默认1): " pip_choice
     case ${pip_choice:-1} in
         2)
             USER_PIP_DISPLAY="阿里云"
@@ -527,31 +719,30 @@ configure_pip() {
             USER_UV_INDEX="$USER_PIP_INDEX"
             ;;
         3)
+            USER_PIP_DISPLAY="腾讯云"
+            USER_PIP_INDEX="http://mirrors.cloud.tencent.com/pypi/simple"
+            USER_PIP_HOST="mirrors.cloud.tencent.com"
+            USER_UV_INDEX="$USER_PIP_INDEX"
+            ;;
+        4)
             USER_PIP_DISPLAY="清华大学"
             USER_PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
             USER_PIP_HOST="pypi.tuna.tsinghua.edu.cn"
             USER_UV_INDEX="$USER_PIP_INDEX"
             ;;
-        4)
+        5)
             USER_PIP_DISPLAY="中国科学技术大学"
             USER_PIP_INDEX="https://pypi.mirrors.ustc.edu.cn/simple/"
             USER_PIP_HOST="pypi.mirrors.ustc.edu.cn"
             USER_UV_INDEX="$USER_PIP_INDEX"
             ;;
-        5)
+        6)
             USER_PIP_DISPLAY="官方源"
             USER_PIP_INDEX="https://pypi.org/simple"
             USER_PIP_HOST="pypi.org"
             USER_UV_INDEX="$USER_PIP_INDEX"
             ;;
-        6)
-            read -p "请输入自定义镜像源 URL: " custom_pip_index
-            custom_pip_index="${custom_pip_index//[[:space:]]/}"
-            if [[ -z "$custom_pip_index" ]]; then
-                USER_PIP_DISPLAY="系统默认"
-                USER_PIP_INDEX=""
-                USER_PIP_HOST=""
-                USER_UV_INDEX=""
+        7)
             else
                 if [[ "$custom_pip_index" != http://* && "$custom_pip_index" != https://* ]]; then
                     custom_pip_index="https://$custom_pip_index"
@@ -731,16 +922,38 @@ services:
     network_mode: "host"
 EOF
             docker_compose_safe "$NAPCAT_DIR"
-            if [ $? -eq 0 ]; then log_success "NapCat (Docker) 部署成功！"; fi
+            if [ $? -eq 0 ]; then
+                log_success "NapCat (Docker) 部署成功！"
+            else
+                log_error "NapCat (Docker) 部署失败。"
+                echo -e "${YELLOW}如果报错与现有 napcat 容器冲突有关，可尝试移除旧容器。${NC}"
+                read -p "是否移除现有名称以 napcat 开头的容器并重试？(y/n): " remove_retry
+                if [[ "$remove_retry" == "y" || "$remove_retry" == "Y" ]]; then
+                    if remove_existing_napcat_containers; then
+                        docker_compose_safe "$NAPCAT_DIR"
+                        if [ $? -eq 0 ]; then
+                            log_success "NapCat (Docker) 部署成功！"
+                        else
+                            log_error "重试后 NapCat (Docker) 仍部署失败。"
+                        fi
+                    fi
+                fi
+            fi
             ;;
         2)
             cd "$USER_INSTALL_PATH" || return
             while true; do
                 curl -o napcat.sh https://nclatest.znin.net/NapNeko/NapCat-Installer/main/script/install.sh && bash napcat.sh --docker n --cli y
                 if [ $? -eq 0 ]; then break; fi
-                log_error "脚本执行出错，是否重试? (y/n)"
+                log_error "脚本执行出错。"
+                echo -e "${YELLOW}如果报错与现有 napcat 容器冲突有关，可尝试移除旧容器。${NC}"
+                read -p "是否先移除现有名称以 napcat 开头的容器？(y/n): " remove_old_nc
+                if [[ "$remove_old_nc" == "y" || "$remove_old_nc" == "Y" ]]; then
+                    remove_existing_napcat_containers
+                fi
+                log_error "是否重试? (y/n)"
                 read -p "> " sh_retry
-                if [[ "$sh_retry" != "y" ]]; then break; fi
+                if [[ "$sh_retry" != "y" && "$sh_retry" != "Y" ]]; then break; fi
             done
             ;;
     esac
@@ -1199,6 +1412,7 @@ manage_napcat_menu() {
         draw_line
         echo -e "${YELLOW}5.${NC} 重建容器 ${WHITE}(更新/修复，保留配置)${NC}"
         echo -e "${RED}6. 移除容器 ${WHITE}(删除容器与配置，慎用！)${NC}"
+        echo -e "${RED}7.${NC} 移除现有 NapCat 容器 ${WHITE}(删除所有名称以 napcat 开头的容器)${NC}"
         draw_line
         echo -e "${WHITE}0.${NC} 返回上一级"
         echo -e ""
@@ -1230,6 +1444,13 @@ manage_napcat_menu() {
                 if [[ "$del_confirm" == "DELETE" ]]; then
                     if [[ -d "$NAPCAT_DIR" ]]; then cd "$NAPCAT_DIR"; docker compose down 2>/dev/null; cd ..; rm -rf "$NAPCAT_DIR"; log_success "已移除。"; fi
                 fi; sleep 2 ;;
+            7)
+                echo -e "${RED}警告: 此操作将删除所有名称以 napcat 开头的容器！${NC}"
+                read -p "确认执行? (y/n): " rm_nc_confirm
+                if [[ "$rm_nc_confirm" == "y" || "$rm_nc_confirm" == "Y" ]]; then
+                    remove_existing_napcat_containers
+                fi
+                sleep 2 ;;
             0) return ;;
         esac
         if [[ "$nc_opt" =~ [1-3] ]]; then read -p "操作完成，按回车继续..."; fi
@@ -1269,9 +1490,7 @@ manage_maibot_menu() {
         sleep 1
 
         if [[ "$run_mode" == "2" ]]; then
-            echo -e "${GREEN}即将进入控制台... 按 Ctrl+A 然后 D 退出${NC}"
-            read -p "按回车立即进入..."
-            screen -r "$SCREEN_NAME"
+            confirm_and_enter_screen "$SCREEN_NAME" "已取消进入 Screen 窗口。MaiBot 仍在后台运行。"
         else
             log_success "MaiBot 已在后台启动"
         fi
@@ -1309,7 +1528,9 @@ manage_maibot_menu() {
         case $m_choice in
             1) start_maibot ;;
             2) stop_maibot ;;
-            3) screen -r "$SCREEN_NAME" ;;
+            3)
+                confirm_and_enter_screen "$SCREEN_NAME"
+                ;;
             0) return ;;
         esac
         if [[ "$m_choice" != "3" && "$m_choice" != "0" ]]; then read -p "操作已执行，按回车继续..."; fi
@@ -1455,7 +1676,7 @@ manage_lpmm_menu() {
                     read -p "请选择 [1-3]: " exist_opt
                     case $exist_opt in
                         1)
-                            echo -e "进入 screen 会话，退出请按 ${WHITE}Ctrl+A 然后 D${NC}"
+                            echo -e "进入 screen 会话，退出请按 ${WHITE}Ctrl+A 然后按下 D${NC}"
                             sleep 1
                             screen -r mai-lpmm-info
                             ;;
@@ -1470,7 +1691,7 @@ manage_lpmm_menu() {
                             fi
                             log_success "已在后台启动，会话名: mai-lpmm-info"
                             echo -e "查看进度: ${CYAN}screen -r mai-lpmm-info${NC}"
-                            echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
+                            echo -e "退出 screen: ${WHITE}Ctrl+A 然后按下 D${NC}"
                             read -p "是否立即进入该 screen 会话？(y/n): " enter_now
                             if [[ "$enter_now" == "y" || "$enter_now" == "Y" ]]; then
                                 screen -r mai-lpmm-info
@@ -1487,7 +1708,7 @@ manage_lpmm_menu() {
                     fi
                     log_success "已在后台启动，会话名: mai-lpmm-info"
                     echo -e "查看进度: ${CYAN}screen -r mai-lpmm-info${NC}"
-                    echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
+                    echo -e "退出 screen: ${WHITE}Ctrl+A 按下 D${NC}"
                     read -p "是否立即进入该 screen 会话？(y/n): " enter_now
                     if [[ "$enter_now" == "y" || "$enter_now" == "Y" ]]; then
                         screen -r mai-lpmm-info
@@ -1546,7 +1767,7 @@ manage_lpmm_menu() {
                     read -p "请选择 [1-3]: " exist_opt
                     case $exist_opt in
                         1)
-                            echo -e "进入 screen 会话，退出请按 ${WHITE}Ctrl+A 然后 D${NC}"
+                            echo -e "进入 screen 会话，退出请按 ${WHITE}Ctrl+A 然后按下 D${NC}"
                             sleep 1
                             screen -r mai-lpmm-import
                             ;;
@@ -1561,7 +1782,7 @@ manage_lpmm_menu() {
                             fi
                             log_success "已在后台启动，会话名: mai-lpmm-import"
                             echo -e "查看进度: ${CYAN}screen -r mai-lpmm-import${NC}"
-                            echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
+                            echo -e "退出 screen: ${WHITE}Ctrl+A 按下 D${NC}"
                             read -p "是否立即进入该 screen 会话？(y/n): " enter_now
                             if [[ "$enter_now" == "y" || "$enter_now" == "Y" ]]; then
                                 screen -r mai-lpmm-import
@@ -1578,7 +1799,7 @@ manage_lpmm_menu() {
                     fi
                     log_success "已在后台启动，会话名: mai-lpmm-import"
                     echo -e "查看进度: ${CYAN}screen -r mai-lpmm-import${NC}"
-                    echo -e "退出 screen: ${WHITE}Ctrl+A 然后 D${NC}"
+                    echo -e "退出 screen: ${WHITE}Ctrl+A 然后按下 D${NC}"
                     read -p "是否立即进入该 screen 会话？(y/n): " enter_now
                     if [[ "$enter_now" == "y" || "$enter_now" == "Y" ]]; then
                         screen -r mai-lpmm-import
@@ -1632,133 +1853,12 @@ manage_plugins_menu() {
 
     mkdir -p "$PLUGINS_DIR"
 
-    # 获取当前配置的 GitHub 加速源，如果未设置则进行选择
-    get_github_proxy() {
-        if [[ -n "$USER_GH_PROXY" ]]; then
-            return
-        fi
-        
-        draw_header
-        echo -e "${BLUE}▶ GitHub 线路配置${NC}"
-        
-        run_speedtest() {
-            echo -e "${YELLOW}正在并行测速，请稍候...${NC}"
-            local temp_dir=$(mktemp -d)
-            local mirrors=("https://github.com" "${GITHUB_MIRRORS[@]}")
-            
-            for mirror in "${mirrors[@]}"; do
-                (
-                    local test_url
-                    [[ "$mirror" == "https://github.com" ]] && test_url="$TEST_FILE_PATH" || test_url="${mirror}/${TEST_FILE_PATH}"
-                    
-                    local time_cost
-                    time_cost=$(curl -sL -o /dev/null --max-time 3 -w "%{time_total}" "$test_url")
-                    local exit_code=$?
-                    
-                    if [[ $exit_code -eq 0 ]]; then
-                        local ms=$(awk -v t="$time_cost" 'BEGIN {printf "%.0f", t*1000}')
-                        echo "$ms $mirror" >> "$temp_dir/results"
-                    else
-                        echo "9999 $mirror" >> "$temp_dir/results"
-                    fi
-                ) &
-            done
-            wait
-            
-            echo -e "\n   延迟(ms) | 线路地址"
-            echo -e "------------|----------------------------------"
-            
-            local best_mirror=""
-            local best_ms=9999
-
-            if [[ -f "$temp_dir/results" ]]; then
-                sort -n "$temp_dir/results" > "$temp_dir/sorted"
-                
-                while read line; do
-                    local ms=$(echo $line | awk '{print $1}')
-                    local url=$(echo $line | awk '{print $2}')
-                    
-                    if [[ "$ms" == "9999" ]]; then
-                        echo -e " ${RED}超时/失败${NC}| $url"
-                    else
-                        if [[ -z "$best_mirror" ]]; then
-                            best_mirror=$url
-                            best_ms=$ms
-                        fi
-                        
-                        local color=$GREEN
-                        if [ "$ms" -gt 800 ]; then color=$YELLOW; fi
-                        if [ "$ms" -gt 1500 ]; then color=$RED; fi
-                        echo -e " ${color}${ms}ms${NC}\t| $url"
-                    fi
-                done < "$temp_dir/sorted"
-            fi
-
-            if [[ -n "$best_mirror" ]]; then
-                USER_GH_PROXY="$best_mirror"
-                echo -e "\n自动选择: ${CYAN}$best_mirror${NC} (延迟: ${best_ms}ms)"
-            else
-                USER_GH_PROXY="https://gh-proxy.org"
-                echo -e "\n${RED}测速全失败，使用默认代理。${NC}"
-            fi
-            
-            rm -rf "$temp_dir"
-            sleep 2
-        }
-
-        echo -e "${GREEN}1.${NC} 自动测速选择最佳线路 ${WHITE}(并行极速)${NC}"
-        echo -e "${GREEN}2.${NC} 手动选择线路"
-        echo -e "${GREEN}3.${NC} 官方直连"
-        read -p "选择 [1-3] (默认1): " gh_choice
-        case ${gh_choice:-1} in
-            2) select mirror in "${GITHUB_MIRRORS[@]}"; do USER_GH_PROXY="$mirror"; break; done ;;
-            3) USER_GH_PROXY="https://github.com" ;;
-            *) run_speedtest ;;
-        esac
-    }
-
-    # 将 GitHub URL 转换为加速 URL
-    convert_github_url() {
-        local url="$1"
-        
-        # ���除末尾的 .git
-        url="${url%.git}"
-        
-        # 提取 username/repo
-        local repo=""
-        if [[ "$url" =~ github\.com/([^/]+/[^/]+)$ ]]; then
-            repo="${BASH_REMATCH[1]}"
-        else
-            echo "$url"
-            return
-        fi
-        
-        if [[ "$USER_GH_PROXY" == "https://github.com" ]]; then
-            echo "https://github.com/$repo.git"
-        else
-            echo "${USER_GH_PROXY}/https://github.com/${repo}.git"
-        fi
-    }
-
-    list_plugins() {
-        if [[ ! -d "$PLUGINS_DIR" ]]; then return; fi
-        local count=0
-        for dir in "$PLUGINS_DIR"/*; do
-            # 跳过 __pycache__ 目录
-            if [[ -d "$dir" && "$(basename "$dir")" != "__pycache__" ]]; then
-                count=$((count + 1))
-                echo -e " ${CYAN}$(basename "$dir")${NC}"
-            fi
-        done
-        if [[ $count -eq 0 ]]; then echo -e " ${GREY}(无插件)${NC}"; fi
-    }
-
     while true; do
         draw_header
         echo -e "${BLUE}▶ 插件管理${NC}"
         echo -e " 插件目录: ${CYAN}$PLUGINS_DIR${NC}"
         echo -e "\n 已安装插件:"
-        list_plugins
+        list_plugins_display "$PLUGINS_DIR"
         draw_line
         echo -e "${GREEN}1.${NC} 安装插件"
         echo -e "${GREEN}2.${NC} 卸载插件"
@@ -1785,7 +1885,11 @@ manage_plugins_menu() {
                 fi
 
                 # 获取 GitHub 加速源
-                get_github_proxy
+                if [[ -z "$USER_GH_PROXY" ]]; then
+                    draw_header
+                    echo -e "${BLUE}▶ GitHub 线路配置${NC}"
+                    choose_github_proxy
+                fi
 
                 # 规范化 URL
                 local git_url=""
@@ -1806,8 +1910,7 @@ manage_plugins_menu() {
 
                 if [[ -d "$plugin_path" ]]; then
                     log_info "检测到插件已存在，尝试更新..."
-                    cd "$plugin_path" || continue
-                    git pull
+                    git_update_safe "$plugin_path"
                     if [ $? -eq 0 ]; then
                         log_success "插件更新成功"
                         cd "$MAI_PATH" || continue
@@ -1875,15 +1978,12 @@ manage_plugins_menu() {
                 fi
 
                 echo -e "已安装的插件:"
-                local plugins=()
+                mapfile -t plugins < <(get_plugin_names "$PLUGINS_DIR")
                 local idx=1
-                for dir in "$PLUGINS_DIR"/*; do
-                    if [[ -d "$dir" && "$(basename "$dir")" != "__pycache__" ]]; then
-                        local plugin_name=$(basename "$dir")
-                        plugins+=("$plugin_name")
-                        echo -e " ${GREEN}$idx.${NC} $plugin_name"
-                        idx=$((idx + 1))
-                    fi
+                local plugin_name
+                for plugin_name in "${plugins[@]}"; do
+                    echo -e " ${GREEN}$idx.${NC} $plugin_name"
+                    idx=$((idx + 1))
                 done
 
                 read -p "请输入插件名称或序号: " plugin_input
@@ -1933,15 +2033,12 @@ manage_plugins_menu() {
                 fi
 
                 echo -e "已安装的插件:"
-                local plugins=()
+                mapfile -t plugins < <(get_plugin_names "$PLUGINS_DIR")
                 local idx=1
-                for dir in "$PLUGINS_DIR"/*; do
-                    if [[ -d "$dir" && "$(basename "$dir")" != "__pycache__" ]]; then
-                        local plugin_name=$(basename "$dir")
-                        plugins+=("$plugin_name")
-                        echo -e " ${GREEN}$idx.${NC} $plugin_name"
-                        idx=$((idx + 1))
-                    fi
+                local plugin_name
+                for plugin_name in "${plugins[@]}"; do
+                    echo -e " ${GREEN}$idx.${NC} $plugin_name"
+                    idx=$((idx + 1))
                 done
 
                 read -p "请输入插件名称或序号: " plugin_input
