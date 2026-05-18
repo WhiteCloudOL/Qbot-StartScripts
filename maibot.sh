@@ -28,7 +28,6 @@ GITHUB_MIRRORS=(
     "https://cdn.gh-proxy.org"
     "https://ghproxy.net"
     "https://ghfast.top"
-    "https://git.yylx.win"
     "https://github.moeyy.xyz"
 )
 
@@ -366,16 +365,7 @@ git_update_safe() {
     cd "$repo_dir" || return 1
 
     if [[ -n "$remote_url" ]]; then
-        local current_origin_url
-        current_origin_url=$(git remote get-url origin 2>/dev/null)
-        if [[ -n "$current_origin_url" && "$current_origin_url" != "$remote_url" ]]; then
-            log_info "检测到 origin 远程地址与当前选择不一致，正在切换为: $remote_url"
-            git remote set-url origin "$remote_url"
-            if [[ $? -ne 0 ]]; then
-                log_error "更新 origin 远程地址失败。"
-                return 1
-            fi
-        fi
+        log_info "本次更新将使用当前选择的 Git 地址: $remote_url"
     fi
 
     if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
@@ -404,21 +394,25 @@ git_update_safe() {
     fi
 
     if [[ -n "$branch" ]]; then
-        git fetch --depth 1 origin "$branch"
+        if [[ -n "$remote_url" ]]; then
+            git fetch --depth 1 "$remote_url" "$branch"
+        else
+            git fetch --depth 1 origin "$branch"
+        fi
         if [[ $? -ne 0 ]]; then
             log_error "获取远程分支失败: $branch"
             return 1
         fi
 
-        git checkout -B "$branch" "origin/$branch"
+        git checkout -B "$branch" FETCH_HEAD
         if [[ $? -ne 0 ]]; then
             log_error "切换分支失败: $branch"
             return 1
         fi
 
-        git reset --hard "origin/$branch"
+        git reset --hard FETCH_HEAD
         if [[ $? -ne 0 ]]; then
-            log_error "同步远程分支失败: origin/$branch"
+            log_error "同步远程分支失败: $branch"
             return 1
         fi
     else
@@ -430,15 +424,25 @@ git_update_safe() {
             return 1
         fi
 
-        git fetch --depth 1 origin "$current_branch"
+        if [[ -n "$remote_url" ]]; then
+            git fetch --depth 1 "$remote_url" "$current_branch"
+        else
+            git fetch --depth 1 origin "$current_branch"
+        fi
         if [[ $? -ne 0 ]]; then
             log_error "获取远程分支失败: $current_branch"
             return 1
         fi
 
-        git reset --hard "origin/$current_branch"
+        git checkout -B "$current_branch" FETCH_HEAD
         if [[ $? -ne 0 ]]; then
-            log_error "同步远程分支失败: origin/$current_branch"
+            log_error "切换分支失败: $current_branch"
+            return 1
+        fi
+
+        git reset --hard FETCH_HEAD
+        if [[ $? -ne 0 ]]; then
+            log_error "同步远程分支失败: $current_branch"
             return 1
         fi
     fi
