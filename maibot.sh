@@ -2,7 +2,7 @@
 #License: GNU GENERAL PUBLIC LICENSE Version 3
 #Author: 清蒸云鸭
 #with VibeCoding
-#Update: 2026-01-20
+#Update: 2026-05-18
 
 # =========================================================
 # 1. 全局配置与变量
@@ -384,7 +384,7 @@ git_update_safe() {
                 ;;
             *)
                 log_warning "已取消更新。"
-                return 1
+                return 3
                 ;;
         esac
     fi
@@ -473,9 +473,13 @@ git_clone_safe() {
             fi
 
             git_update_safe "$target_dir" "$branch"
-            if [ $? -eq 0 ]; then
+            local update_result=$?
+            if [[ $update_result -eq 0 ]]; then
                 cd "$install_path" || return 1
                 return 0
+            elif [[ $update_result -eq 3 ]]; then
+                cd "$install_path" || return 1
+                return 1
             else
                 log_error "更新失败。"
                 cd "$install_path" || return 1
@@ -743,7 +747,9 @@ configure_pip() {
             USER_UV_INDEX="$USER_PIP_INDEX"
             ;;
         7)
-            else
+            echo -e "${YELLOW}请输入自定义 PyPI 镜像源，格式类似: https://pypi.example.com/simple${NC}"
+            read -p "请输入: " custom_pip_index
+            if [[ -n "$custom_pip_index" ]]; then
                 if [[ "$custom_pip_index" != http://* && "$custom_pip_index" != https://* ]]; then
                     custom_pip_index="https://$custom_pip_index"
                 fi
@@ -751,6 +757,11 @@ configure_pip() {
                 USER_PIP_INDEX="$custom_pip_index"
                 USER_PIP_HOST=$(echo "$custom_pip_index" | awk -F/ '{print $3}')
                 USER_UV_INDEX="$USER_PIP_INDEX"
+            else
+                USER_PIP_DISPLAY="系统默认"
+                USER_PIP_INDEX=""
+                USER_PIP_HOST=""
+                USER_UV_INDEX=""
             fi
             ;;
         *)
